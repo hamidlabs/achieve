@@ -43,7 +43,9 @@ fn niri_recenter() {
 pub fn size_for(view: &str) -> (f64, f64) {
     match view {
         "dashboard" => (880.0, 600.0),
-        "editor" => (560.0, 600.0),
+        // Compact task dialog: same width as the hub (no width jump), a touch
+        // taller so the centered card floats over the dimmed list behind it.
+        "editor" => (468.0, 560.0),
         "break" => (440.0, 480.0),
         // "nudge" = the unified task hub (planning + tracking + tasks + done)
         _ => (468.0, 672.0),

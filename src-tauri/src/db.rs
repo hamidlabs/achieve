@@ -954,10 +954,16 @@ pub fn snapshot(conn: &Connection) -> Result<Snapshot> {
         0
     };
     let anchor = get_setting(conn, "break_anchor").unwrap_or_else(now);
+    // Focused (non-break) minutes since the last break. Clamp each segment's
+    // start to the anchor (MAX(start_at, anchor)) and include any segment that
+    // ENDS after the anchor, so a task that was already running when the break
+    // ended/was skipped still counts its post-anchor time. Without the clamp an
+    // open segment that began before the anchor was dropped entirely, so the
+    // work clock got stuck at 0 and the break reminder never fired.
     let worked_since_break_min: i64 = conn
         .query_row(
-            "SELECT COALESCE(SUM(CAST((julianday(COALESCE(end_at,?1))-julianday(start_at))*1440 AS INTEGER)),0)
-             FROM segments WHERE task_id<>?2 AND start_at>=?3",
+            "SELECT COALESCE(SUM(CAST((julianday(COALESCE(end_at,?1))-julianday(MAX(start_at,?3)))*1440 AS INTEGER)),0)
+             FROM segments WHERE task_id<>?2 AND COALESCE(end_at,?1) > ?3",
             params![now(), break_tid.unwrap_or(-1), anchor],
             |r| r.get(0),
         )

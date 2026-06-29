@@ -2,6 +2,7 @@
   import { onMount } from "svelte";
   import { listen } from "@tauri-apps/api/event";
   import { store, refreshAll } from "./lib/store.svelte";
+  import { initSound } from "./lib/sound";
   import type { Snapshot, View } from "./lib/types";
   import TasksView from "./lib/views/TasksView.svelte";
   import DashboardView from "./lib/views/DashboardView.svelte";
@@ -9,6 +10,7 @@
 
   onMount(() => {
     refreshAll();
+    initSound();
     const unNav = listen<View>("navigate", (e) => {
       store.view = e.payload;
       // The tasks hub auto-fits its height to content; nudge it to re-measure

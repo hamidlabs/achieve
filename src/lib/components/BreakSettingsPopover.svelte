@@ -2,9 +2,17 @@
   import { onMount } from "svelte";
   import Icon from "../icons/Icon.svelte";
   import { api } from "../api";
+  import { isMuted, setMuted, breakStart } from "../sound";
   import type { BreakSettings } from "../types";
 
   let { onClose }: { onClose: () => void } = $props();
+
+  let soundOn = $state(!isMuted());
+  function toggleSound() {
+    soundOn = !soundOn;
+    setMuted(!soundOn);
+    if (soundOn) breakStart(); // preview the cue when enabling
+  }
 
   let s = $state<BreakSettings>({ enabled: true, work_min: 50, duration_min: 5, snooze_min: 5 });
   onMount(async () => {
@@ -41,6 +49,15 @@
       <div class="text-[10.5px] text-ink-faint">Ultradian rest after focused work</div>
     </div>
     <span class="switch" class:on={s.enabled}><span class="knob"></span></span>
+  </button>
+
+  <!-- sound toggle -->
+  <button class="srow" onclick={toggleSound}>
+    <div class="text-left flex-1">
+      <div class="text-[12.5px] font-medium text-ink">Sound cues</div>
+      <div class="text-[10.5px] text-ink-faint">Gentle chimes for breaks and completed tasks</div>
+    </div>
+    <span class="switch" class:on={soundOn}><span class="knob"></span></span>
   </button>
 
   <div class="my-2 h-px" style="background: var(--line);"></div>

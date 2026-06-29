@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { fly } from "svelte/transition";
   import Icon from "../icons/Icon.svelte";
   import MarkdownEditor from "../ui/MarkdownEditor.svelte";
   import { api } from "../api";
@@ -14,18 +15,43 @@
   }
   let { task, categories, onSaved, onClose }: Props = $props();
 
+  // Editing shows every field at once (quick changes); creating is a short
+  // guided wizard (Name -> Category -> Time) so it never feels like a wall of
+  // fields, and the category list can't grow the form unbounded.
+  const isEdit = !!task;
+
   let title = $state(task?.title ?? "");
   let body = $state(task?.body_md ?? "");
-  let categoryId = $state<number | null>(
-    task?.category_id ?? categories[0]?.id ?? null,
-  );
+  let categoryId = $state<number | null>(task?.category_id ?? null);
   let estimate = $state<number | null>(task?.estimate_min ?? 30);
   let daily = $state(task?.recurrence === "daily");
   let saving = $state(false);
+  let showDetails = $state(!!task?.body_md?.trim());
 
   const presets = [15, 30, 45, 60, 90, 120];
 
-  // inline new-category creation
+  // Wizard state (create only).
+  const STEPS = ["Name", "Category", "Time"];
+  let step = $state(0);
+  let dir = $state(1);
+  const canNext = $derived(step !== 0 || title.trim().length > 0);
+  function next() {
+    if (!canNext) return;
+    if (step < STEPS.length - 1) {
+      dir = 1;
+      step += 1;
+    } else {
+      save();
+    }
+  }
+  function back() {
+    if (step > 0) {
+      dir = -1;
+      step -= 1;
+    }
+  }
+
+  // Inline category create / manage.
   const palette = [
     "#6b6bff", "#37b6a6", "#e0a23c", "#c06bd8",
     "#e36b6b", "#4f9be0", "#5bc46b", "#df7bb0",
@@ -35,17 +61,18 @@
   let newCatName = $state("");
   let newCatColor = $state(palette[0]);
 
+  // Pick an existing category; in the wizard this also advances to the next step.
+  function pickCategory(id: number | null) {
+    categoryId = id;
+    if (!isEdit && step === 1) next();
+  }
+
   async function deleteCategory(c: Category) {
-    if (
-      !confirm(
-        `Delete "${c.name}"? Tasks in it are kept and become uncategorized.`,
-      )
-    )
-      return;
+    if (!confirm(`Delete "${c.name}"? Tasks in it are kept and become uncategorized.`)) return;
     try {
       await api.deleteCategory(c.id);
       await refreshCategories();
-      if (categoryId === c.id) categoryId = categories[0]?.id ?? null;
+      if (categoryId === c.id) categoryId = null;
     } catch (e) {
       console.error("[achieve] delete category failed:", e);
       alert("Could not delete the category: " + e);
@@ -58,7 +85,7 @@
     try {
       const id = await api.createCategory(name, newCatColor);
       await refreshCategories();
-      categoryId = id;
+      categoryId = id; // select it, but stay so the choice is visible
     } catch (e) {
       console.error("[achieve] create category failed:", e);
       alert("Could not create the category: " + e);
@@ -96,188 +123,329 @@
       onSaved();
     }
   }
+
+  function autofocus(node: HTMLInputElement) {
+    node.focus();
+  }
+  function fmtPreset(p: number): string {
+    return p < 60 ? `${p}m` : `${p / 60}h`.replace(".5", "½");
+  }
 </script>
 
-<!-- Full-bleed opaque panel (no dark scrim) so it reads as a clean form,
-     not a floating modal with a dark frame around it. -->
-<div
-  class="absolute inset-0 z-20 flex flex-col fade"
-  style="background: linear-gradient(160deg, var(--glass-top), var(--glass-bot));"
->
-  <div class="flex items-center gap-2 px-4 py-3 border-b shrink-0"
-    style="border-color: var(--line);">
-    <Icon name={task ? "pencil" : "plus"} size={16} class="text-accent" />
-    <span class="text-[13px] font-semibold">{task ? "Edit task" : "New task"}</span>
-    <button class="icon-btn ml-auto" onclick={onClose}><Icon name="x" size={16} /></button>
-  </div>
+<!-- Compact dialog floating over the dimmed task list. -->
+<div class="overlay">
+  <button class="scrim no-drag" aria-label="Close" onclick={onClose}></button>
 
-  <div class="flex-1 overflow-y-auto">
-    <div class="max-w-[480px] mx-auto px-4 py-3.5 flex flex-col gap-3.5">
-      <input
-        class="field text-[14px] font-medium"
-        style="user-select:text;"
-        placeholder="What needs doing?"
-        bind:value={title}
-        onkeydown={(e) => e.key === "Enter" && (e.metaKey || e.ctrlKey) && save()}
-      />
-
-      <!-- Category -->
-      <div>
-        <div class="flex items-center justify-between mb-1.5">
-          <span class="text-[11px] font-medium text-ink-faint">Category</span>
-          {#if categories.length > 0}
-            <button
-              class="text-[11px] text-ink-faint hover:text-ink transition flex items-center gap-1"
-              onclick={() => {
-                managingCats = !managingCats;
-                addingCat = false;
-              }}
-            >
-              <Icon name={managingCats ? "check" : "settings"} size={12} />
-              {managingCats ? "Done" : "Manage"}
-            </button>
-          {/if}
-        </div>
-        <div class="flex flex-wrap gap-1.5 items-center">
-          {#each categories as c (c.id)}
-            <div
-              class="chip transition"
-              style={categoryId === c.id && !managingCats
-                ? `background: ${catColor(c.color)}; color: white;`
-                : ""}
-            >
-              <button
-                class="flex items-center gap-1.5"
-                disabled={managingCats}
-                onclick={() => (categoryId = c.id)}
-              >
-                <span class="w-2 h-2 rounded-full" style="background: {categoryId === c.id && !managingCats ? 'white' : catColor(c.color)};"></span>
-                {c.name}
-              </button>
-              {#if managingCats}
-                <button
-                  class="ml-1 -mr-1 grid place-items-center w-4 h-4 rounded-full hover:bg-black/5 transition"
-                  style="color: var(--color-danger);"
-                  title="Delete category"
-                  onclick={() => deleteCategory(c)}
-                >
-                  <Icon name="x" size={11} />
-                </button>
-              {/if}
-            </div>
-          {/each}
-          {#if !managingCats}
-            <button
-              class="chip transition"
-              style="border: 1px dashed var(--line-strong);"
-              onclick={() => (addingCat = !addingCat)}
-            >
-              <Icon name={addingCat ? "x" : "plus"} size={12} /> New
-            </button>
-          {/if}
-        </div>
-
-        {#if addingCat}
-          <div class="mt-2 panel rounded-[var(--radius-md)] p-2.5 flex flex-col gap-2 fade">
-            <div class="flex items-center gap-2">
-              <span class="w-3.5 h-3.5 rounded-full shrink-0" style="background: {newCatColor};"></span>
-              <input
-                class="field no-drag"
-                style="padding:6px 9px; user-select:text;"
-                placeholder="New category name…"
-                bind:value={newCatName}
-                onkeydown={(e) => e.key === "Enter" && createCategory()}
-              />
-              <button
-                class="btn btn-primary"
-                style="padding:6px 12px;"
-                disabled={!newCatName.trim()}
-                onclick={createCategory}
-              >
-                Add
-              </button>
-            </div>
-            <div class="flex flex-wrap gap-1.5">
-              {#each palette as col (col)}
-                <button
-                  class="w-5 h-5 rounded-full transition"
-                  style="background: {col}; outline: {newCatColor === col
-                    ? '2px solid white'
-                    : '2px solid transparent'}; outline-offset: 1px;"
-                  aria-label="color"
-                  onclick={() => (newCatColor = col)}
-                ></button>
-              {/each}
-            </div>
-          </div>
-        {/if}
+  <div class="card no-drag fade">
+    {#if isEdit}
+      <!-- ============ EDIT: everything at once ============ -->
+      <div class="head">
+        <span class="head-ico"><Icon name="pencil" size={14} style="color: var(--color-accent);" /></span>
+        <span class="head-title">Edit task</span>
+        <button class="icon-btn ml-auto" onclick={onClose}><Icon name="x" size={16} /></button>
       </div>
-
-      <!-- Estimate -->
-      <div>
-        <div class="text-[11px] font-medium text-ink-faint mb-1.5 flex items-center gap-1.5">
-          <Icon name="hourglass" size={12} /> Estimate
-        </div>
-        <div class="flex flex-wrap gap-1.5 items-center">
-          {#each presets as p (p)}
-            <button
-              class="chip transition"
-              style={estimate === p ? "background: var(--color-accent); color: white;" : ""}
-              onclick={() => (estimate = p)}
-            >
-              {p < 60 ? `${p}m` : `${p / 60}h`.replace(".5", "½")}
-            </button>
-          {/each}
-          <input
-            type="number"
-            class="field no-drag"
-            style="width:74px; padding:4px 8px; user-select:text;"
-            placeholder="min"
-            bind:value={estimate}
-          />
-        </div>
+      <div class="body scroll flex flex-col gap-3">
+        <input class="field text-[14px] font-medium" style="user-select:text;"
+          placeholder="What needs doing?" bind:value={title}
+          onkeydown={(e) => e.key === "Enter" && (e.metaKey || e.ctrlKey) && save()} />
+        {@render categorySection()}
+        {@render timeSection()}
+        {@render detailsSection()}
       </div>
-
-      <!-- Recurrence -->
-      <button
-        class="flex items-center gap-2.5 text-left"
-        onclick={() => (daily = !daily)}
-      >
-        <span
-          class="w-9 h-5 rounded-full transition relative shrink-0"
-          style={daily
-            ? "background: var(--color-accent);"
-            : "background: color-mix(in oklab, var(--color-ink) 18%, transparent);"}
-        >
-          <span
-            class="absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all"
-            style={daily ? "left: 18px;" : "left: 2px;"}
-          ></span>
-        </span>
-        <span class="text-[12.5px] text-ink flex items-center gap-1.5">
-          <Icon name="repeat" size={14} /> Repeat daily
-        </span>
-      </button>
-
-      <!-- Body markdown -->
-      <div>
-        <div class="text-[11px] font-medium text-ink-faint mb-1.5">Details</div>
-        <MarkdownEditor bind:value={body} rows={5} />
-      </div>
-    </div>
-  </div>
-
-  <div class="px-4 py-3 flex items-center gap-2 border-t shrink-0"
-    style="border-color: var(--line);">
-      {#if task}
-        <button class="btn btn-danger-ghost" onclick={remove}>
-          <Icon name="trash" size={15} /> Delete
+      <div class="foot">
+        <button class="btn btn-danger-ghost" onclick={remove}><Icon name="trash" size={15} /> Delete</button>
+        <div class="flex-1"></div>
+        <button class="btn btn-soft" onclick={onClose}>Cancel</button>
+        <button class="btn btn-primary" onclick={save} disabled={!title.trim()}>
+          <Icon name="check" size={15} /> Save
         </button>
-      {/if}
-      <div class="flex-1"></div>
-      <button class="btn btn-soft" onclick={onClose}>Cancel</button>
-      <button class="btn btn-primary" onclick={save} disabled={!title.trim()}>
-        <Icon name="check" size={15} /> {task ? "Save" : "Add task"}
-      </button>
+      </div>
+    {:else}
+      <!-- ============ CREATE: guided wizard ============ -->
+      <div class="head">
+        {#if step > 0}
+          <button class="icon-btn" title="Back" onclick={back}><Icon name="chevron-right" size={16} class="rotate-180" /></button>
+        {:else}
+          <span class="head-ico"><Icon name="plus" size={14} style="color: var(--color-accent);" /></span>
+        {/if}
+        <span class="head-title">New task</span>
+        <span class="step-count">{step + 1} of {STEPS.length}</span>
+        <button class="icon-btn" onclick={onClose}><Icon name="x" size={16} /></button>
+      </div>
+      <div class="stepper">
+        {#each STEPS as s, i (s)}
+          <span class="seg" class:on={i <= step}></span>
+        {/each}
+      </div>
+
+      <div class="body wizard">
+        {#key step}
+          <div class="step" in:fly={{ x: dir * 18, duration: 170 }}>
+            {#if step === 0}
+              <div class="q">What needs doing?</div>
+              <input class="field field-lg" style="user-select:text;" placeholder="e.g. Draft the proposal"
+                bind:value={title} use:autofocus
+                onkeydown={(e) => e.key === "Enter" && next()} />
+              <p class="hint">Give it a clear, single action. Press Enter to continue.</p>
+            {:else if step === 1}
+              <div class="q">Choose a category</div>
+              {@render categorySection()}
+            {:else}
+              <div class="q">How long will it take?</div>
+              {@render timeSection()}
+              {@render detailsSection()}
+            {/if}
+          </div>
+        {/key}
+      </div>
+
+      <div class="foot">
+        {#if step === 1}
+          <button class="btn btn-ghost" onclick={() => pickCategory(null)}>Skip</button>
+        {/if}
+        <div class="flex-1"></div>
+        <button class="btn btn-primary" onclick={next} disabled={!canNext}>
+          {#if step < STEPS.length - 1}
+            Next <Icon name="chevron-right" size={15} />
+          {:else}
+            <Icon name="check" size={15} /> Create task
+          {/if}
+        </button>
+      </div>
+    {/if}
   </div>
 </div>
+
+<!-- ===================== shared sections ===================== -->
+
+{#snippet categorySection()}
+  <div>
+    {#if categories.length > 0}
+      <div class="flex items-center justify-end mb-1.5">
+        <button class="link-btn" onclick={() => { managingCats = !managingCats; addingCat = false; }}>
+          <Icon name={managingCats ? "check" : "settings"} size={12} />
+          {managingCats ? "Done" : "Manage"}
+        </button>
+      </div>
+    {/if}
+    <div class="cat-scroll flex flex-wrap gap-1.5 items-start content-start">
+      {#each categories as c (c.id)}
+        <div class="chip transition" style={categoryId === c.id && !managingCats ? `background: ${catColor(c.color)}; color: white;` : ""}>
+          <button class="flex items-center gap-1.5" disabled={managingCats} onclick={() => pickCategory(c.id)}>
+            <span class="w-2 h-2 rounded-full" style="background: {categoryId === c.id && !managingCats ? 'white' : catColor(c.color)};"></span>
+            {c.name}
+          </button>
+          {#if managingCats}
+            <button class="ml-1 -mr-1 grid place-items-center w-4 h-4 rounded-full hover:bg-black/5 transition"
+              style="color: var(--color-danger);" title="Delete category" onclick={() => deleteCategory(c)}>
+              <Icon name="x" size={11} />
+            </button>
+          {/if}
+        </div>
+      {/each}
+      {#if !managingCats}
+        <button class="chip transition" style="border: 1px dashed var(--line-strong);" onclick={() => (addingCat = !addingCat)}>
+          <Icon name={addingCat ? "x" : "plus"} size={12} /> New
+        </button>
+      {/if}
+    </div>
+
+    {#if addingCat}
+      <div class="mt-2 panel rounded-[var(--radius-md)] p-2.5 flex flex-col gap-2 fade">
+        <div class="flex items-center gap-2">
+          <span class="w-3.5 h-3.5 rounded-full shrink-0" style="background: {newCatColor};"></span>
+          <input class="field no-drag" style="padding:6px 9px; user-select:text;" placeholder="New category name…"
+            bind:value={newCatName} onkeydown={(e) => e.key === "Enter" && createCategory()} />
+          <button class="btn btn-primary" style="padding:6px 12px;" disabled={!newCatName.trim()} onclick={createCategory}>Add</button>
+        </div>
+        <div class="flex flex-wrap gap-1.5">
+          {#each palette as col (col)}
+            <button class="w-5 h-5 rounded-full transition" aria-label="color"
+              style="background: {col}; outline: {newCatColor === col ? '2px solid white' : '2px solid transparent'}; outline-offset: 1px;"
+              onclick={() => (newCatColor = col)}></button>
+          {/each}
+        </div>
+      </div>
+    {/if}
+  </div>
+{/snippet}
+
+{#snippet timeSection()}
+  <div class="flex flex-col gap-3">
+    <div>
+      <div class="flex flex-wrap gap-1.5 items-center">
+        {#each presets as p (p)}
+          <button class="chip transition" style={estimate === p ? "background: var(--color-accent); color: white;" : ""} onclick={() => (estimate = p)}>
+            {fmtPreset(p)}
+          </button>
+        {/each}
+        <input type="number" class="field no-drag" style="width:74px; padding:4px 8px; user-select:text;" placeholder="min" bind:value={estimate} />
+      </div>
+    </div>
+    <button class="flex items-center gap-2.5 text-left" onclick={() => (daily = !daily)}>
+      <span class="w-9 h-5 rounded-full transition relative shrink-0"
+        style={daily ? "background: var(--color-accent);" : "background: color-mix(in oklab, var(--color-ink) 18%, transparent);"}>
+        <span class="absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all" style={daily ? "left: 18px;" : "left: 2px;"}></span>
+      </span>
+      <span class="text-[12.5px] text-ink flex items-center gap-1.5"><Icon name="repeat" size={14} /> Repeat daily</span>
+    </button>
+  </div>
+{/snippet}
+
+{#snippet detailsSection()}
+  <div>
+    {#if showDetails}
+      <div class="text-[11px] font-medium text-ink-faint mb-1.5">Details</div>
+      <MarkdownEditor bind:value={body} rows={3} />
+    {:else}
+      <button class="link-btn" onclick={() => (showDetails = true)}>
+        <Icon name="plus" size={12} /> Add details
+      </button>
+    {/if}
+  </div>
+{/snippet}
+
+<style>
+  .overlay {
+    position: absolute;
+    inset: 0;
+    z-index: 20;
+    display: grid;
+    place-items: center;
+    padding: 14px;
+  }
+  .scrim {
+    position: absolute;
+    inset: 0;
+    border-radius: var(--radius-card);
+    background: rgba(17, 18, 22, 0.22);
+    backdrop-filter: blur(2px);
+    -webkit-backdrop-filter: blur(2px);
+  }
+  .card {
+    position: relative;
+    z-index: 1;
+    width: 100%;
+    max-width: 422px;
+    max-height: 100%;
+    display: flex;
+    flex-direction: column;
+    background: linear-gradient(170deg, var(--glass-top), var(--glass-bot));
+    border: 0.5px solid var(--line-strong);
+    border-radius: var(--radius-lg);
+    box-shadow: 0 18px 50px -14px rgba(0, 0, 0, 0.42);
+    overflow: hidden;
+  }
+  .head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 12px;
+    border-bottom: 0.5px solid var(--line);
+    flex-shrink: 0;
+  }
+  .head-ico {
+    display: grid;
+    place-items: center;
+    width: 24px;
+    height: 24px;
+    border-radius: 7px;
+    background: color-mix(in oklab, var(--color-accent) 13%, white);
+  }
+  .head-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--color-ink);
+  }
+  .step-count {
+    margin-left: auto;
+    font-size: 10.5px;
+    font-weight: 600;
+    color: var(--color-ink-ghost);
+    font-variant-numeric: tabular-nums;
+  }
+  .stepper {
+    display: flex;
+    gap: 4px;
+    padding: 8px 12px 0;
+    flex-shrink: 0;
+  }
+  .seg {
+    flex: 1;
+    height: 3px;
+    border-radius: 999px;
+    background: color-mix(in oklab, var(--color-ink) 10%, transparent);
+    transition: background 0.25s ease;
+  }
+  .seg.on {
+    background: var(--color-accent);
+  }
+  .body {
+    padding: 12px;
+    flex: 1;
+    min-height: 0;
+  }
+  .body.scroll {
+    overflow-y: auto;
+  }
+  .body.wizard {
+    overflow: hidden;
+    position: relative;
+  }
+  .step {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .q {
+    font-size: 15px;
+    font-weight: 650;
+    letter-spacing: -0.2px;
+    color: var(--color-ink);
+  }
+  .field-lg {
+    font-size: 15px;
+    font-weight: 500;
+    padding: 9px 12px;
+  }
+  .hint {
+    font-size: 11.5px;
+    color: var(--color-ink-faint);
+  }
+  .foot {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 12px;
+    border-top: 0.5px solid var(--line);
+    flex-shrink: 0;
+  }
+  /* Bounded category list so it scrolls instead of growing the dialog. */
+  .cat-scroll {
+    max-height: 156px;
+    overflow-y: auto;
+  }
+  .link-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 11px;
+    color: var(--color-ink-faint);
+    transition: color 0.12s ease;
+  }
+  .link-btn:hover {
+    color: var(--color-ink);
+  }
+  .btn-ghost {
+    background: transparent;
+    color: var(--color-ink-faint);
+  }
+  .btn-ghost:hover {
+    color: var(--color-ink);
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .step {
+      transition: none;
+    }
+  }
+</style>

@@ -9,6 +9,7 @@
   import BreakSettingsPopover from "../components/BreakSettingsPopover.svelte";
   import { api } from "../api";
   import { store, go, refreshSnapshot, refreshTasks } from "../store.svelte";
+  import { taskDone } from "../sound";
   import { fmtMin, catColor } from "../format";
   import type { Task, Bar } from "../types";
 
@@ -187,7 +188,7 @@
       await refresh();
     } finally { switching = false; }
   }
-  async function complete(id: number) { await api.completeTask(id); await refresh(); }
+  async function complete(id: number) { taskDone(); await api.completeTask(id); await refresh(); }
   async function reopen(id: number) { await api.reopenTask(id); await refresh(); }
   async function confirmPause() {
     if (!active) return;
@@ -473,6 +474,16 @@
         {/if}
       </div>
       {/key}
+
+      {#if !active && tab === "today" && planned.length > 0}
+        <div class="track-veil" title="Pick a task to start tracking">
+          <div class="track-veil-inner">
+            <span class="tv-orb"><span class="tv-ico"><Icon name="target" size={20} /></span></span>
+            <div class="tv-title">You're not tracking anything</div>
+            <div class="tv-sub">Hover to pick a task and start the clock</div>
+          </div>
+        </div>
+      {/if}
     </div>
   </div>
 </WindowFrame>
@@ -553,8 +564,96 @@
   }
   /* Tasks card: the tab bar + list read as one panel (like the Today card). */
   .list-panel {
+    position: relative;
     padding: 0;
     overflow: hidden;
+  }
+  /* Not-tracking veil: when no task is running, a frosted prompt covers the list
+     to give clear direction; hovering the card fades it so you can start a task. */
+  .track-veil {
+    position: absolute;
+    inset: 0;
+    z-index: 5;
+    display: grid;
+    place-items: center;
+    text-align: center;
+    padding: 16px;
+    cursor: pointer;
+    background: color-mix(in oklab, var(--glass-top) 74%, transparent);
+    backdrop-filter: blur(6px) saturate(120%);
+    -webkit-backdrop-filter: blur(6px) saturate(120%);
+    transition: opacity 0.3s ease;
+  }
+  .list-panel:hover .track-veil {
+    opacity: 0;
+    pointer-events: none;
+  }
+  .track-veil-inner {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 9px;
+    animation: tvfloat 3.2s ease-in-out infinite;
+  }
+  .tv-orb {
+    position: relative;
+    display: grid;
+    place-items: center;
+    width: 48px;
+    height: 48px;
+    border-radius: 999px;
+    color: var(--color-accent);
+    background: color-mix(in oklab, var(--color-accent) 13%, white);
+  }
+  /* Slow attention pulse — a calm ping, not a harsh blink. */
+  .tv-orb::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: 999px;
+    background: var(--color-accent);
+    opacity: 0.32;
+    animation: tvping 2.4s cubic-bezier(0, 0, 0.2, 1) infinite;
+  }
+  .tv-ico {
+    position: relative;
+    z-index: 1;
+  }
+  .tv-title {
+    font-size: 14px;
+    font-weight: 650;
+    color: var(--color-ink);
+    letter-spacing: -0.1px;
+  }
+  .tv-sub {
+    font-size: 11.5px;
+    color: var(--color-ink-faint);
+  }
+  @keyframes tvping {
+    0% {
+      transform: scale(1);
+      opacity: 0.32;
+    }
+    70%,
+    100% {
+      transform: scale(1.85);
+      opacity: 0;
+    }
+  }
+  @keyframes tvfloat {
+    0%,
+    100% {
+      transform: translateY(0);
+    }
+    50% {
+      transform: translateY(-3px);
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .track-veil-inner,
+    .tv-orb::before {
+      animation: none;
+    }
   }
   /* Tab bar = the card header. An underline indicator rides the bottom divider
      and slides between the three equal cells. */
