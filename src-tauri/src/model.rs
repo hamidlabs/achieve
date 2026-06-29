@@ -1,0 +1,145 @@
+//! Data types shared with the Svelte frontend (mirrored in src/lib/types.ts).
+
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Category {
+    pub id: i64,
+    pub name: String,
+    pub color: String,
+    pub parent_id: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Task {
+    pub id: i64,
+    pub category_id: Option<i64>,
+    pub category_name: Option<String>,
+    pub category_color: Option<String>,
+    pub title: String,
+    pub body_md: String,
+    pub estimate_min: Option<i64>,
+    pub status: String,
+    pub recurrence: Option<String>,
+    pub plan_date: Option<String>,
+    /// Sum of all tracked segments for this task, including any open one.
+    pub tracked_min: i64,
+}
+
+/// Privacy-safe summary shown before the user taps Reveal. Counts only, never
+/// task content, so it is safe to have on screen during a shared meeting.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Snapshot {
+    pub pending: i64,
+    pub in_progress: i64,
+    pub completed_today: i64,
+    pub active_task_id: Option<i64>,
+    pub active_task_title: Option<String>,
+    /// The active task reached its estimate and is paused awaiting a decision
+    /// (extend or finish). Its clock is stopped; `active_since_min` is 0.
+    pub active_awaiting: bool,
+    pub active_since_min: i64,
+    /// Estimate of the active task (None if it was entered without one).
+    pub active_estimate_min: Option<i64>,
+    /// Total tracked minutes on the active task across ALL its segments
+    /// (not just the current one) so overrun is measured against real effort.
+    pub active_tracked_min: i64,
+    /// Total minutes tracked today across all tasks (for the day summary).
+    pub tracked_today_min: i64,
+    pub minutes_left_in_day: i64,
+    pub minutes_committed: i64,
+    pub greeting: String,
+    pub planned_today: bool,
+    /// Minutes of continuous tracked work since the last break (drives break timing).
+    pub worked_since_break_min: i64,
+    /// True while the active task is the special Break task (you're on a break).
+    pub on_break: bool,
+    /// Seconds left in the current break (can be <=0 once the break is over).
+    pub break_remaining_sec: i64,
+}
+
+/// User-tunable rest-break (ultradian) settings.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BreakSettings {
+    pub enabled: bool,
+    /// Minutes of continuous tracked work before a break is suggested.
+    pub work_min: i64,
+    /// How long a break runs.
+    pub duration_min: i64,
+    /// How long "Snooze" defers the prompt.
+    pub snooze_min: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DayPlan {
+    pub date: String,
+    pub intentions: String,
+    pub available_minutes: i64,
+    pub stop_time: Option<String>,
+}
+
+/// A span of automatic focus capture awaiting the user's one-tap label.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FocusSpan {
+    pub id: i64,
+    pub app_id: Option<String>,
+    pub title: Option<String>,
+    pub start_at: String,
+    pub minutes: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CategoryStat {
+    pub name: String,
+    pub color: String,
+    pub minutes: i64,
+}
+
+/// Time spent in one application (the automatic ground truth from focus_log).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AppStat {
+    pub app: String,
+    pub minutes: i64,
+}
+
+/// A task (or the synthetic "Untracked" bucket) with its actual tracked time and
+/// the apps it was spent in, so the dashboard can show where each task's time went.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlannedActual {
+    pub title: String,
+    pub color: String,
+    pub estimate_min: i64,
+    pub tracked_min: i64,
+    pub done: bool,
+    /// true for the synthetic "Untracked" row (active time with no task = distraction).
+    pub untracked: bool,
+    pub apps: Vec<AppStat>,
+}
+
+/// One column of the hero activity chart (an hour of the day, or a day of the
+/// week), split into focused (tracked) vs untracked (no task) minutes.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Bar {
+    pub label: String,
+    pub focus_min: i64,
+    pub untracked_min: i64,
+    /// Dominant category (or "Untracked") in this bucket, for the chart tooltip.
+    pub top: String,
+    pub top_color: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Dashboard {
+    pub period: String, // "day" | "week" | "month"
+    pub start_date: String,
+    pub end_date: String,
+    pub total_tracked_min: i64,
+    pub focus_min: i64,
+    pub distraction_min: i64,
+    pub completed: i64,
+    pub total_tasks: i64,
+    pub by_category: Vec<CategoryStat>,
+    pub by_app: Vec<AppStat>,
+    pub planned_actual: Vec<PlannedActual>,
+    pub bars: Vec<Bar>,
+}
