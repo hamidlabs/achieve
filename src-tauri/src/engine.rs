@@ -83,9 +83,11 @@ pub fn spawn(app: AppHandle, db: Arc<Mutex<Connection>>, idle_flag: PathBuf, idl
                 continue;
             }
 
-            // While a task is actively tracking, keep resetting the idle clock,
-            // so the countdown measures time spent with NO task selected.
-            if snap.active_task_id.is_some() {
+            // While a task is actively TRACKING, keep resetting the re-nudge
+            // clock so we don't pop the hub. An `awaiting` task (estimate reached,
+            // clock stopped) is NOT tracking: it still needs a decision, so let
+            // the clock run and treat it like a nudge below.
+            if snap.active_task_id.is_some() && !snap.active_awaiting {
                 last_nudge = Some(Instant::now());
             }
 
@@ -149,10 +151,15 @@ pub fn spawn(app: AppHandle, db: Arc<Mutex<Connection>>, idle_flag: PathBuf, idl
             // gentle cadence whenever there's work pending OR there's still time
             // left in the day (so an empty list still invites you to add a task,
             // but we don't nag late at night with nothing planned).
-            if !visible
-                && snap.active_task_id.is_none()
-                && (snap.pending > 0 || snap.minutes_left_in_day > 0)
-            {
+            // Surface the hub when something needs attention and the window is
+            // hidden: either no task is selected (pick one) OR a task is
+            // `awaiting` a decision after reaching its estimate (extend/finish).
+            // The awaiting case must re-surface even past the stop time, since an
+            // unresolved estimate left open is exactly what we must not forget.
+            let needs_attention = snap.active_task_id.is_none() || snap.active_awaiting;
+            let worth_surfacing =
+                snap.active_awaiting || snap.pending > 0 || snap.minutes_left_in_day > 0;
+            if !visible && needs_attention && worth_surfacing {
                 let due = last_nudge
                     .map(|t| t.elapsed() >= RENUDGE_AFTER)
                     .unwrap_or(true);
