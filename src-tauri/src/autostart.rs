@@ -19,7 +19,9 @@ pub fn ensure_autostart() {
 
     let dir = format!("{home}/.config/autostart");
     let path = format!("{dir}/achieve.desktop");
-    let exec_line = format!("Exec={exec}");
+    // Launch via APPIMAGE_EXTRACT_AND_RUN=1 (the documented run method) so we
+    // don't depend on FUSE being ready this early in the session.
+    let exec_line = format!("Exec=env APPIMAGE_EXTRACT_AND_RUN=1 {exec}");
 
     // Already pointing at the right exec? leave it.
     if std::fs::read_to_string(&path)

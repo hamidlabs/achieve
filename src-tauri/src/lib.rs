@@ -31,6 +31,13 @@ pub struct AppState {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        // MUST be the first plugin: a second launch (two autostart sources, a
+        // double click) hands off here and then exits, so only one instance ever
+        // runs. We surface the already-running hub so the relaunch "does
+        // something" instead of silently nothing.
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            window::show_view(app, "nudge");
+        }))
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             desktop::ensure_niri_float_rule();
