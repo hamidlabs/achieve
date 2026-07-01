@@ -38,6 +38,10 @@ pub fn spawn(app: AppHandle, db: Arc<Mutex<Connection>>, idle_flag: PathBuf, idl
         let mut was_idle = false;
         let mut last_break_prompt: Option<Instant> = None;
         let mut last_email_attempt: Option<Instant> = None;
+        // Startup catch-up: send today's summary on this boot even if we launched
+        // after the configured hour. Cleared after the first send (or once we see
+        // today's is already sent) so it can't re-fire at midnight on later days.
+        let mut email_catchup = true;
         let mut current_day = String::new();
 
         loop {
@@ -53,7 +57,11 @@ pub fn spawn(app: AppHandle, db: Arc<Mutex<Connection>>, idle_flag: PathBuf, idl
             // Daily summary email. Cheap gate every tick; when due, throttle real
             // attempts so a failing send retries across the morning, not every
             // tick. Build under the lock, send unlocked, then mark sent.
-            let want_email = db.lock().ok().map(|c| email::should_send(&c)).unwrap_or(false);
+            let want_email = db
+                .lock()
+                .ok()
+                .map(|c| email::should_send(&c) || (email_catchup && email::should_send_on_start(&c)))
+                .unwrap_or(false);
             if want_email {
                 let due = last_email_attempt.map(|t| t.elapsed() >= EMAIL_RETRY).unwrap_or(true);
                 if due {
@@ -65,6 +73,7 @@ pub fn spawn(app: AppHandle, db: Arc<Mutex<Connection>>, idle_flag: PathBuf, idl
                                 if let Ok(c) = db.lock() {
                                     email::mark_sent(&c);
                                 }
+                                email_catchup = false;
                                 println!("[email] daily summary sent to {}", p.to);
                             }
                             Err(e) => eprintln!("[email] send failed: {e}"),
@@ -72,6 +81,9 @@ pub fn spawn(app: AppHandle, db: Arc<Mutex<Connection>>, idle_flag: PathBuf, idl
                     }
                 }
             } else {
+                // Nothing due (disabled, misconfigured, or already sent today):
+                // end the startup catch-up so it can't fire at local midnight.
+                email_catchup = false;
                 last_email_attempt = None;
             }
 

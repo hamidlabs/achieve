@@ -79,27 +79,41 @@ fn has(conn: &Connection, key: &str) -> bool {
 }
 
 /// Cheap gate the engine can call every tick: is a daily summary due right now?
-pub fn should_send(conn: &Connection) -> bool {
+/// The scheduled path waits until the configured hour; the startup catch-up path
+/// (`ignore_hour`) does not, so a PC booted after the send hour, or even before
+/// it, still gets the day's summary on launch instead of missing it entirely.
+fn is_due(conn: &Connection, ignore_hour: bool) -> bool {
     if db::setting(conn, "email_enabled").as_deref() != Some("1") {
         return false;
     }
     if !has(conn, "brevo_api_key") || !has(conn, "email_to") {
         return false;
     }
-    let hour = db::setting(conn, "email_hour").and_then(|v| v.parse().ok()).unwrap_or(8);
-    if db::hour_now(conn) < hour {
-        return false;
+    if !ignore_hour {
+        let hour = db::setting(conn, "email_hour").and_then(|v| v.parse().ok()).unwrap_or(8);
+        if db::hour_now(conn) < hour {
+            return false;
+        }
     }
     // Once per local day.
     let today = db::today(conn);
     db::setting(conn, "email_last_sent").as_deref() != Some(today.as_str())
 }
 
-/// Build the payload for today's scheduled send, or None if it isn't due.
+/// Scheduled daily send: due only once the configured hour has passed.
+pub fn should_send(conn: &Connection) -> bool {
+    is_due(conn, false)
+}
+
+/// Startup catch-up: due on launch regardless of the hour, so a late boot still
+/// sends today's summary. Used once per boot until the first successful send.
+pub fn should_send_on_start(conn: &Connection) -> bool {
+    is_due(conn, true)
+}
+
+/// Build the payload for the daily summary using the configured day offset
+/// (default 1 = yesterday). The caller is responsible for gating on is_due.
 pub fn build_due_payload(conn: &Connection) -> Option<Payload> {
-    if !should_send(conn) {
-        return None;
-    }
     let offset = db::setting(conn, "email_offset").and_then(|v| v.parse().ok()).unwrap_or(1);
     build_payload(conn, offset).ok()
 }
