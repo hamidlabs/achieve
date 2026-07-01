@@ -30,13 +30,64 @@ fn niri_recenter() {
     std::thread::spawn(|| {
         for delay in [70u64, 130, 200, 320, 450] {
             std::thread::sleep(std::time::Duration::from_millis(delay));
-            let _ = std::process::Command::new("niri")
-                .args(["msg", "action", "center-window"])
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .status();
+            niri_center();
         }
     });
+}
+
+/// Reveal the popup on niri when it is shown proactively. A Wayland client can't
+/// raise or focus itself, and a freshly (re)mapped floating window may land on
+/// another workspace or behind the current one, so a proactive popup would
+/// "play its sound but never appear". We look our window up by id and tell niri
+/// to focus it (which switches to its workspace, bringing it into view) and then
+/// center it. Retried on a short schedule because the surface is only mapped a
+/// frame or two after show(), and its id can change across hide/show.
+fn niri_reveal() {
+    if std::env::var_os("NIRI_SOCKET").is_none() {
+        return;
+    }
+    std::thread::spawn(|| {
+        for delay in [60u64, 120, 200, 320, 460, 650] {
+            std::thread::sleep(std::time::Duration::from_millis(delay));
+            if let Some(id) = niri_window_id() {
+                let _ = std::process::Command::new("niri")
+                    .args(["msg", "action", "focus-window", "--id", &id.to_string()])
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .status();
+            }
+            niri_center();
+        }
+    });
+}
+
+/// Center the currently focused window via niri.
+fn niri_center() {
+    let _ = std::process::Command::new("niri")
+        .args(["msg", "action", "center-window"])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status();
+}
+
+/// Find our popup's niri window id by app_id/title ("Achieve").
+fn niri_window_id() -> Option<u64> {
+    let out = std::process::Command::new("niri")
+        .args(["msg", "--json", "windows"])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let windows: serde_json::Value = serde_json::from_slice(&out.stdout).ok()?;
+    for w in windows.as_array()? {
+        let app_id = w.get("app_id").and_then(|v| v.as_str()).unwrap_or("");
+        let title = w.get("title").and_then(|v| v.as_str()).unwrap_or("");
+        if app_id == "Achieve" || title == "Achieve" {
+            return w.get("id").and_then(|v| v.as_u64());
+        }
+    }
+    None
 }
 
 /// Logical (width, height) for each view.
@@ -86,6 +137,6 @@ pub fn show_view(app: &AppHandle, view: &str) {
         let _ = win.center();
         let _ = win.show();
         let _ = win.set_focus();
-        niri_recenter();
+        niri_reveal();
     }
 }

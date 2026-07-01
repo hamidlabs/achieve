@@ -9,7 +9,7 @@
   import BreakSettingsPopover from "../components/BreakSettingsPopover.svelte";
   import { api } from "../api";
   import { store, go, refreshSnapshot, refreshTasks } from "../store.svelte";
-  import { taskDone, noTaskWarning } from "../sound";
+  import { taskDone } from "../sound";
   import { fmtMin, catColor } from "../format";
   import type { Task, Bar, TimelineSpan } from "../types";
 
@@ -126,16 +126,6 @@
   const doneCount = $derived(completed.length);
   const totalCount = $derived(store.tasks.length);
   const bufferMin = $derived(Math.max(0, left - committed));
-
-  // Warn (once, then re-nudge) when there are planned tasks but nothing is
-  // being tracked, so an idle session doesn't slip by unnoticed.
-  const idle = $derived(!active && planned.length > 0);
-  $effect(() => {
-    if (!idle) return;
-    noTaskWarning();
-    const id = setInterval(() => noTaskWarning(), 3 * 60 * 1000);
-    return () => clearInterval(id);
-  });
 
   // Active-task tracking (live via snapshot). When the task reaches its
   // estimate it is paused `awaiting` a decision: the clock is frozen at the
