@@ -108,6 +108,8 @@ pub struct AppStat {
 pub struct PlannedActual {
     pub title: String,
     pub color: String,
+    pub category: String,
+    pub body_md: String,
     pub estimate_min: i64,
     pub tracked_min: i64,
     pub done: bool,
@@ -128,6 +130,19 @@ pub struct Bar {
     pub top_color: String,
 }
 
+/// One real tracking session on the day timeline: the exact local minute it
+/// started and ended (minutes from midnight), whether it was focused work or
+/// untracked time, and its category/app for the label. Used by the day chart to
+/// draw activity at its true clock position instead of hourly buckets.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TimelineSpan {
+    pub start_min: i64,
+    pub end_min: i64,
+    pub focus: bool,
+    pub label: String,
+    pub color: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Dashboard {
     pub period: String, // "day" | "week" | "month"
@@ -142,4 +157,9 @@ pub struct Dashboard {
     pub by_app: Vec<AppStat>,
     pub planned_actual: Vec<PlannedActual>,
     pub bars: Vec<Bar>,
+    /// Day period only: actual sessions on a 12am->stop-time timeline.
+    pub timeline: Vec<TimelineSpan>,
+    /// Day period only: right edge of the timeline axis (minutes from midnight)
+    /// = the day's stop time, extended to cover any later activity.
+    pub day_end_min: i64,
 }

@@ -1,94 +1,225 @@
 <script lang="ts">
-  // Overlaid focus-vs-untracked area chart. Each series plots its OWN value
-  // (not a stacked total), so an all-tracked day shows the untracked line at
-  // the floor. Shared by the History dashboard and the Tasks hub.
+  // Activity chart.
+  //  - DAY: a line/area chart on a 12am->stop clock axis. Each tracked session
+  //    rises at its exact start, holds for its duration, and falls at its exact
+  //    end (focus = teal, untracked = grey). Mouse-wheel zooms the time axis
+  //    (centered on the cursor) and drag pans, so short sessions can be zoomed
+  //    in to read; double-click resets.
+  //  - WEEK / MONTH: a stacked bar per day.
   import { fmtMin } from "../format";
-  import type { Bar } from "../types";
+  import type { Bar, TimelineSpan } from "../types";
 
   type Period = "day" | "week" | "month";
   let {
     bars = [],
+    timeline = [],
+    dayEndMin = 0,
     period = "day",
     tone = "card",
     height = 128,
     compact = false,
   }: {
     bars?: Bar[];
+    timeline?: TimelineSpan[];
+    dayEndMin?: number;
     period?: Period;
     tone?: "card" | "glass" | "bare";
     height?: number;
     compact?: boolean;
   } = $props();
 
-  // "bare" = no surface of its own (for embedding inside another card, flush);
-  // "card" = white raised panel; "glass" = standalone frosted panel.
+  const UNTR = "#c2c6cf";
+
   const wrapClass = $derived(
     tone === "bare"
       ? ""
       : `rounded-[var(--radius-lg)] px-4 pt-3.5 pb-2.5 ${tone === "glass" ? "chart-glass" : "panel-raised"}`,
   );
 
-  const H = $derived(height); // plot height in px
+  const H = $derived(height);
   let chartW = $state(0);
-  const LPAD = 30; // left gutter for y-axis labels
+  const LPAD = 30;
   const RPAD = 12;
-  const TPAD = $derived(compact ? 8 : 14); // headroom (less when compact)
+  const TPAD = $derived(compact ? 8 : 16);
 
+  const useTimeline = $derived(period === "day" && timeline.length > 0 && dayEndMin > 0);
+
+  function clk(min: number): string {
+    const m = Math.round(min);
+    const h = Math.floor(m / 60) % 24;
+    const mm = ((m % 60) + 60) % 60;
+    const ap = h < 12 ? "a" : "p";
+    const h12 = h % 12 === 0 ? 12 : h % 12;
+    return mm === 0 ? `${h12}${ap}` : `${h12}:${String(mm).padStart(2, "0")}${ap}`;
+  }
+
+  // ---- DAY zoom/pan state. view=null means "full day". ----
+  const FULL = $derived(Math.max(60, dayEndMin));
+  const MIN_SPAN = 10; // closest zoom: a 10-minute window
+  let view = $state<{ min: number; max: number } | null>(null);
+  // Reset the zoom whenever the day/extent changes.
+  let lastFull = -1;
+  $effect(() => {
+    if (FULL !== lastFull) { lastFull = FULL; view = null; }
+  });
+  const vMin = $derived(view ? view.min : 0);
+  const vMax = $derived(view ? view.max : FULL);
+  const zoomed = $derived(view !== null);
+
+  const tl = $derived.by(() => {
+    const span = Math.max(1, vMax - vMin);
+    const innerW = Math.max(0, chartW - LPAD - RPAD);
+    const plotH = H - TPAD;
+    const xAt = (t: number) => LPAD + ((t - vMin) / span) * innerW;
+    const visible = timeline.filter((s) => s.end_min > vMin && s.start_min < vMax);
+    const rawMax = Math.max(1, ...visible.map((s) => s.end_min - s.start_min));
+    const step = 15;
+    const yMax = Math.max(step, Math.ceil(rawMax / step) * step);
+    const yAt = (v: number) => TPAD + (1 - v / yMax) * plotH;
+    const items = visible.map((s, i) => {
+      const x0 = Math.max(LPAD, xAt(s.start_min));
+      const x1 = Math.min(chartW - RPAD, xAt(s.end_min));
+      const dur = s.end_min - s.start_min;
+      return { ...s, i, dur, x0, x1: Math.max(x0 + 1.5, x1), w: Math.max(1.5, x1 - x0), cx: (x0 + x1) / 2, y: yAt(dur) };
+    });
+    const grid = [0, 0.5, 1].map((f) => ({ y: yAt(yMax * f), val: Math.round(yMax * f) }));
+    // session boundary clock labels within the view, thinned
+    const rawPts = visible
+      .flatMap((s) => [
+        { x: xAt(s.start_min), min: s.start_min },
+        { x: xAt(s.end_min), min: s.end_min },
+      ])
+      .filter((p) => p.x >= LPAD - 1 && p.x <= chartW - RPAD + 1)
+      .sort((a, b) => a.x - b.x);
+    const minGap = compact ? 1e9 : 34;
+    const ticks: { x: number; min: number }[] = [];
+    for (const p of rawPts) if (!ticks.length || p.x - ticks[ticks.length - 1].x >= minGap) ticks.push(p);
+    return { span, innerW, yMax, xAt, yAt, items, grid, ticks };
+  });
+
+  // ---- WEEK / MONTH stacked bars ----
   const chart = $derived.by(() => {
     const n = bars.length;
-    // Scale to the larger of the two series in any bucket (overlaid, not stacked).
-    const rawMax = Math.max(1, ...bars.map((b) => Math.max(b.focus_min, b.untracked_min)));
+    const rawMax = Math.max(1, ...bars.map((b) => b.focus_min + b.untracked_min));
     const step = period === "week" ? 60 : 15;
     const max = Math.max(step, Math.ceil(rawMax / step) * step);
     const innerW = Math.max(0, chartW - LPAD - RPAD);
-    const xAt = (i: number) => LPAD + (n <= 1 ? innerW / 2 : (i / (n - 1)) * innerW);
-    const yAt = (v: number) => TPAD + (1 - v / max) * (H - TPAD);
-    const focus = bars.map((b, i) => ({ x: xAt(i), y: yAt(b.focus_min) }));
-    const untr = bars.map((b, i) => ({ x: xAt(i), y: yAt(b.untracked_min) }));
-    const grid = [0, 0.5, 1].map((f) => ({ y: yAt(max * f), val: Math.round(max * f) }));
-    return { n, max, innerW, xAt, yAt, focus, untr, grid };
+    const plotH = H - TPAD;
+    const bandW = n > 0 ? innerW / n : innerW;
+    const barW = Math.max(3, Math.min(compact ? 13 : 26, bandW * (compact ? 0.72 : 0.62)));
+    const cx = (i: number) => LPAD + i * bandW + bandW / 2;
+    const hOf = (v: number) => (v / max) * plotH;
+    const segs = bars.map((b, i) => {
+      const fH = hOf(b.focus_min);
+      const uH = hOf(b.untracked_min);
+      const fy = H - fH;
+      const uy = fy - uH;
+      const total = b.focus_min + b.untracked_min;
+      return { i, f: b.focus_min, u: b.untracked_min, total, x: cx(i) - barW / 2, w: barW, cx: cx(i), fH, uH, fy, uy, topY: total > 0 ? uy : H };
+    });
+    const grid = [0, 0.5, 1].map((f) => ({ y: TPAD + (1 - f) * plotH, val: Math.round(max * f) }));
+    return { n, max, innerW, bandW, barW, cx, segs, grid };
   });
-  const hasData = $derived(bars.some((b) => b.focus_min + b.untracked_min > 0));
 
-  function line(pts: { x: number; y: number }[]): string {
-    return pts.map((p, i) => `${i ? "L" : "M"}${p.x.toFixed(1)} ${p.y.toFixed(1)}`).join(" ");
+  const hasData = $derived(
+    useTimeline ? timeline.length > 0 : bars.some((b) => b.focus_min + b.untracked_min > 0),
+  );
+  const R = $derived(compact ? 1.5 : 2.5);
+
+  // Rounded-top hump (square bottom) for a session's filled area.
+  function hump(x: number, y: number, w: number, r: number): string {
+    const h = H - y;
+    if (h <= 0.4) return "";
+    const rr = Math.min(r, w / 2, h);
+    return `M${x.toFixed(1)} ${H} L${x.toFixed(1)} ${(y + rr).toFixed(1)} `
+      + `Q${x.toFixed(1)} ${y.toFixed(1)} ${(x + rr).toFixed(1)} ${y.toFixed(1)} `
+      + `L${(x + w - rr).toFixed(1)} ${y.toFixed(1)} `
+      + `Q${(x + w).toFixed(1)} ${y.toFixed(1)} ${(x + w).toFixed(1)} ${(y + rr).toFixed(1)} `
+      + `L${(x + w).toFixed(1)} ${H} Z`;
   }
-  function area(pts: { x: number; y: number }[]): string {
-    if (!pts.length) return "";
-    const first = pts[0], last = pts[pts.length - 1];
-    return `M${first.x.toFixed(1)} ${H} ${line(pts)} L${last.x.toFixed(1)} ${H} Z`;
+  function humpLine(x0: number, x1: number, y: number, r: number): string {
+    const rr = Math.min(r, (x1 - x0) / 2, H - y);
+    return `M${x0.toFixed(1)} ${H} L${x0.toFixed(1)} ${(y + rr).toFixed(1)} `
+      + `Q${x0.toFixed(1)} ${y.toFixed(1)} ${(x0 + rr).toFixed(1)} ${y.toFixed(1)} `
+      + `L${(x1 - rr).toFixed(1)} ${y.toFixed(1)} `
+      + `Q${x1.toFixed(1)} ${y.toFixed(1)} ${x1.toFixed(1)} ${(y + rr).toFixed(1)} L${x1.toFixed(1)} ${H}`;
+  }
+  function rTop(x: number, y: number, w: number, h: number, r: number): string {
+    if (h <= 0.4) return "";
+    const rr = Math.min(r, w / 2, h);
+    const b = y + h;
+    return `M${x.toFixed(1)} ${b.toFixed(1)} L${x.toFixed(1)} ${(y + rr).toFixed(1)} `
+      + `Q${x.toFixed(1)} ${y.toFixed(1)} ${(x + rr).toFixed(1)} ${y.toFixed(1)} `
+      + `L${(x + w - rr).toFixed(1)} ${y.toFixed(1)} `
+      + `Q${(x + w).toFixed(1)} ${y.toFixed(1)} ${(x + w).toFixed(1)} ${(y + rr).toFixed(1)} `
+      + `L${(x + w).toFixed(1)} ${b.toFixed(1)} Z`;
   }
 
   let hoverIdx = $state<number | null>(null);
-  function onMove(e: MouseEvent) {
-    const { n, innerW } = chart;
-    if (n <= 0) return;
-    const x = e.offsetX - LPAD;
-    hoverIdx = n <= 1 ? 0 : Math.max(0, Math.min(n - 1, Math.round((x / innerW) * (n - 1))));
+  let dragging = $state(false);
+  let dragStartX = 0;
+  let dragStartView: { min: number; max: number } | null = null;
+
+  function onWheel(e: WheelEvent) {
+    if (compact || !useTimeline) return;
+    e.preventDefault();
+    const innerW = Math.max(1, chartW - LPAD - RPAD);
+    const span = vMax - vMin;
+    const frac = Math.min(1, Math.max(0, (e.offsetX - LPAD) / innerW));
+    const cursorT = vMin + frac * span;
+    const factor = e.deltaY > 0 ? 1.25 : 0.8;
+    let newSpan = Math.min(FULL, Math.max(MIN_SPAN, span * factor));
+    if (newSpan >= FULL) { view = null; return; }
+    let newMin = cursorT - frac * newSpan;
+    let newMax = newMin + newSpan;
+    if (newMin < 0) { newMin = 0; newMax = newSpan; }
+    if (newMax > FULL) { newMax = FULL; newMin = FULL - newSpan; }
+    view = { min: newMin, max: newMax };
   }
-  // Show a value label above a point if it carries enough time to be worth it.
+  function onDown(e: MouseEvent) {
+    if (compact || !useTimeline || !zoomed) return;
+    dragging = true;
+    dragStartX = e.offsetX;
+    dragStartView = { min: vMin, max: vMax };
+  }
+  function onUp() { dragging = false; dragStartView = null; }
+
+  function onMove(e: MouseEvent) {
+    if (useTimeline) {
+      if (dragging && dragStartView) {
+        const innerW = Math.max(1, chartW - LPAD - RPAD);
+        const span = dragStartView.max - dragStartView.min;
+        const dt = -((e.offsetX - dragStartX) / innerW) * span;
+        let nmin = dragStartView.min + dt;
+        let nmax = dragStartView.max + dt;
+        if (nmin < 0) { nmin = 0; nmax = span; }
+        if (nmax > FULL) { nmax = FULL; nmin = FULL - span; }
+        view = { min: nmin, max: nmax };
+        return;
+      }
+      const m = vMin + ((e.offsetX - LPAD) / Math.max(1, tl.innerW)) * (vMax - vMin);
+      const hit = tl.items.find((it) => m >= it.start_min - 1 && m <= it.end_min + 1);
+      hoverIdx = hit ? hit.start_min : null; // key by start_min (stable across zoom)
+      return;
+    }
+    const { n, bandW } = chart;
+    if (n <= 0 || bandW <= 0) return;
+    hoverIdx = Math.max(0, Math.min(n - 1, Math.floor((e.offsetX - LPAD) / bandW)));
+  }
+  function onLeave() { hoverIdx = null; dragging = false; }
+
   function showVal(i: number): boolean {
-    if (compact) return false; // sparkline: rely on hover, keep it clean
-    const b = bars[i];
-    if (!b) return false;
-    const peak = Math.max(b.focus_min, b.untracked_min);
-    if (peak <= 0) return false;
-    if (period === "month") return false; // too many days; gridlines + hover instead
-    if (period === "week") return true;
-    return peak >= chart.max * 0.18;
+    if (compact) return false;
+    const s = chart.segs[i];
+    if (!s || s.total <= 0) return false;
+    if (period === "month") return false;
+    return true;
   }
   function showTick(i: number): boolean {
     const n = chart.n;
     if (period === "week" || n <= 8) return true;
     const step = Math.ceil(n / 8);
     return i % step === 0 || i === n - 1;
-  }
-  function barLabel(raw: string): string {
-    if (period !== "day") return raw;
-    const h = parseInt(raw, 10);
-    const ampm = h < 12 ? "a" : "p";
-    const h12 = h % 12 === 0 ? 12 : h % 12;
-    return `${h12}${ampm}`;
   }
 </script>
 
@@ -97,11 +228,16 @@
     <div class="flex items-center justify-between mb-2">
       <span class="text-[10.5px] font-semibold tracking-wide uppercase text-ink-faint">Activity</span>
       <div class="flex items-center gap-3.5 text-[10.5px] text-ink-faint">
+        {#if useTimeline && zoomed}
+          <button class="zoom-reset no-drag" onclick={() => (view = null)} title="Reset zoom">
+            {clk(vMin)}–{clk(vMax)} · reset
+          </button>
+        {/if}
         <span class="inline-flex items-center gap-1.5">
           <span class="w-2.5 h-2.5 rounded-[3px]" style="background: var(--color-accent);"></span> Focus
         </span>
         <span class="inline-flex items-center gap-1.5">
-          <span class="w-2.5 h-2.5 rounded-[3px]" style="background: #c2c6cf;"></span> Untracked
+          <span class="w-2.5 h-2.5 rounded-[3px]" style="background: {UNTR};"></span> Untracked
         </span>
       </div>
     </div>
@@ -109,67 +245,101 @@
 
   {#if hasData}
     <div class="relative" bind:clientWidth={chartW}>
-      <svg width="100%" height={H} class="block" role="img"
-        onmousemove={onMove} onmouseleave={() => (hoverIdx = null)}>
+      <svg width="100%" height={H} class="block {useTimeline && !compact ? (dragging ? 'grabbing' : 'zoomable') : ''}" role="img"
+        onmousemove={onMove} onmouseleave={onLeave} onmousedown={onDown} onmouseup={onUp}
+        onwheel={onWheel} ondblclick={() => (view = null)}>
         <defs>
           <linearGradient id="gfocus" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stop-color="var(--color-accent)" stop-opacity="0.30" />
-            <stop offset="100%" stop-color="var(--color-accent)" stop-opacity="0.02" />
+            <stop offset="0%" stop-color="var(--color-accent)" stop-opacity="0.32" />
+            <stop offset="100%" stop-color="var(--color-accent)" stop-opacity="0.03" />
           </linearGradient>
           <linearGradient id="guntr" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stop-color="#c2c6cf" stop-opacity="0.45" />
-            <stop offset="100%" stop-color="#c2c6cf" stop-opacity="0.04" />
+            <stop offset="0%" stop-color={UNTR} stop-opacity="0.5" />
+            <stop offset="100%" stop-color={UNTR} stop-opacity="0.05" />
           </linearGradient>
         </defs>
 
-        <!-- y gridlines + labels -->
-        {#each chart.grid as g (g.val)}
-          <line x1={LPAD} x2={chartW - RPAD} y1={g.y} y2={g.y}
-            stroke="var(--color-ink)" stroke-opacity="0.07" stroke-width="1" />
-          <text x={LPAD - 6} y={g.y + 3} text-anchor="end"
-            font-size="8.5" fill="var(--color-ink-ghost)">{g.val ? fmtMin(g.val) : "0"}</text>
-        {/each}
-
-        <!-- overlaid: untracked behind, focus in front; each plots its own value -->
-        <path d={area(chart.untr)} fill="url(#guntr)" />
-        <path d={area(chart.focus)} fill="url(#gfocus)" />
-        <path d={line(chart.untr)} fill="none" stroke="#aab0ba" stroke-width="1.5" />
-        <path d={line(chart.focus)} fill="none" stroke="var(--color-accent)" stroke-width="2" />
-
-        <!-- always-on value label at each notable bucket's peak line -->
-        {#each bars as b, i (b.label)}
-          {#if showVal(i)}
-            {@const pk = b.focus_min >= b.untracked_min ? chart.focus[i] : chart.untr[i]}
-            <text x={pk.x} y={pk.y - 6} text-anchor="middle"
-              font-size="9" font-weight="600" fill="var(--color-ink-soft)">{fmtMin(Math.max(b.focus_min, b.untracked_min))}</text>
+        {#if useTimeline}
+          {#each tl.grid as g, gi (gi)}
+            <line x1={LPAD} x2={chartW - RPAD} y1={g.y} y2={g.y}
+              stroke="var(--color-ink)" stroke-opacity="0.07" stroke-width="1" />
+            <text x={LPAD - 6} y={g.y + 3} text-anchor="end"
+              font-size="8.5" fill="var(--color-ink-ghost)">{g.val ? fmtMin(g.val) : "0"}</text>
+          {/each}
+          {#each tl.items as it (it.start_min)}
+            {@const dim = hoverIdx !== null && hoverIdx !== it.start_min}
+            <path d={hump(it.x0, it.y, it.w, R)} fill={it.focus ? "url(#gfocus)" : "url(#guntr)"} opacity={dim ? 0.5 : 1} />
+            <path d={humpLine(it.x0, it.x1, it.y, R)} fill="none"
+              stroke={it.focus ? "var(--color-accent)" : "#aab0ba"} stroke-width={it.focus ? 2 : 1.5}
+              stroke-linejoin="round" opacity={dim ? 0.55 : 1} />
+            {#if !compact && it.w >= 26}
+              <text x={it.cx} y={it.y - 5} text-anchor="middle" font-size="9" font-weight="600"
+                fill={it.focus ? "var(--color-accent)" : "#9aa0aa"}>{fmtMin(it.dur)}</text>
+            {/if}
+          {/each}
+        {:else}
+          {#each chart.grid as g (g.val)}
+            <line x1={LPAD} x2={chartW - RPAD} y1={g.y} y2={g.y}
+              stroke="var(--color-ink)" stroke-opacity="0.07" stroke-width="1" />
+            <text x={LPAD - 6} y={g.y + 3} text-anchor="end"
+              font-size="8.5" fill="var(--color-ink-ghost)">{g.val ? fmtMin(g.val) : "0"}</text>
+          {/each}
+          {#if hoverIdx !== null}
+            <rect x={LPAD + hoverIdx * chart.bandW} y={TPAD} width={chart.bandW} height={H - TPAD}
+              fill="var(--color-ink)" fill-opacity="0.045" />
           {/if}
-        {/each}
-
-        {#if hoverIdx !== null && chart.focus[hoverIdx]}
-          <line x1={chart.focus[hoverIdx].x} x2={chart.focus[hoverIdx].x} y1="0" y2={H}
-            stroke="var(--color-ink)" stroke-opacity="0.12" stroke-width="1" />
-          <circle cx={chart.untr[hoverIdx].x} cy={chart.untr[hoverIdx].y} r="3" fill="#aab0ba" />
-          <circle cx={chart.focus[hoverIdx].x} cy={chart.focus[hoverIdx].y} r="3.5"
-            fill="white" stroke="var(--color-accent)" stroke-width="2" />
+          {#each chart.segs as s (s.i)}
+            {@const dim = hoverIdx !== null && hoverIdx !== s.i}
+            {#if s.f > 0 && s.u > 0}
+              <rect x={s.x} y={s.fy} width={s.w} height={s.fH} fill="var(--color-accent)" opacity={dim ? 0.5 : 0.95} />
+              <path d={rTop(s.x, s.uy, s.w, s.uH, R)} fill={UNTR} opacity={dim ? 0.5 : 1} />
+            {:else if s.f > 0}
+              <path d={rTop(s.x, s.fy, s.w, s.fH, R)} fill="var(--color-accent)" opacity={dim ? 0.5 : 0.95} />
+            {:else if s.u > 0}
+              <path d={rTop(s.x, s.uy, s.w, s.uH, R)} fill={UNTR} opacity={dim ? 0.5 : 1} />
+            {/if}
+          {/each}
+          {#each chart.segs as s (s.i)}
+            {#if showVal(s.i)}
+              <text x={s.cx} y={s.topY - 5} text-anchor="middle" font-size="9" font-weight="600"
+                fill={s.f > 0 ? "var(--color-accent)" : "#9aa0aa"}>{fmtMin(s.f > 0 ? s.f : s.u)}</text>
+            {/if}
+          {/each}
         {/if}
       </svg>
 
-      <!-- tick labels -->
       <div class="relative {compact ? 'h-3' : 'h-3.5'} mt-0.5">
-        {#each bars as b, i (b.label)}
-          {#if showTick(i)}
-            <span class="absolute {compact ? 'text-[8px]' : 'text-[9px]'} text-ink-ghost -translate-x-1/2 whitespace-nowrap"
-              style="left: {chart.xAt(i)}px;">{barLabel(b.label)}</span>
-          {/if}
-        {/each}
+        {#if useTimeline}
+          {#each tl.ticks as t, ti (ti)}
+            <span class="absolute text-[8.5px] text-ink-ghost -translate-x-1/2 whitespace-nowrap tabular-nums"
+              style="left: {t.x}px;">{clk(t.min)}</span>
+          {/each}
+        {:else}
+          {#each bars as b, i (b.label)}
+            {#if showTick(i)}
+              <span class="absolute {compact ? 'text-[8px]' : 'text-[9px]'} text-ink-ghost -translate-x-1/2 whitespace-nowrap"
+                style="left: {chart.cx(i)}px;">{b.label}</span>
+            {/if}
+          {/each}
+        {/if}
       </div>
 
-      {#if hoverIdx !== null && bars[hoverIdx] && chart.focus[hoverIdx]}
-        {@const b = bars[hoverIdx]}
-        {@const anchorY = Math.min(chart.focus[hoverIdx].y, chart.untr[hoverIdx].y)}
-        <!-- tooltip floats exactly 1px above the hovered point and follows it -->
+      {#if useTimeline && !dragging && hoverIdx !== null && tl.items.some((x) => x.start_min === hoverIdx)}
+        {@const it = tl.items.find((x) => x.start_min === hoverIdx)!}
         <div class="pointer-events-none absolute z-30 rounded-[var(--radius-md)] px-3 py-2.5 text-[11px] min-w-[150px] chart-tip"
-          style="left: {Math.min(Math.max(chart.xAt(hoverIdx), 78), chartW - 78)}px; top: {anchorY - 1}px; transform: translate(-50%, -100%);">
+          style="left: {Math.min(Math.max(it.cx, 84), chartW - 84)}px; top: {it.y - 6}px; transform: translate(-50%, -100%);">
+          <div class="flex items-center gap-1.5 pb-1.5 mb-1.5" style="border-bottom: 1px solid rgba(255,255,255,0.16);">
+            <span class="w-2 h-2 rounded-full shrink-0" style="background: {it.focus ? it.color : UNTR};"></span>
+            <span class="font-semibold truncate">{it.label}</span>
+            <span class="ml-auto pl-2 tabular-nums font-medium shrink-0">{fmtMin(it.dur)}</span>
+          </div>
+          <div class="tabular-nums opacity-90">{clk(it.start_min)} – {clk(it.end_min)}</div>
+        </div>
+      {:else if !useTimeline && hoverIdx !== null && bars[hoverIdx] && chart.segs[hoverIdx]}
+        {@const b = bars[hoverIdx]}
+        {@const s = chart.segs[hoverIdx]}
+        <div class="pointer-events-none absolute z-30 rounded-[var(--radius-md)] px-3 py-2.5 text-[11px] min-w-[150px] chart-tip"
+          style="left: {Math.min(Math.max(s.cx, 78), chartW - 78)}px; top: {s.topY - 6}px; transform: translate(-50%, -100%);">
           <div class="flex items-center gap-1.5 pb-1.5 mb-1.5" style="border-bottom: 1px solid rgba(255,255,255,0.16);">
             {#if b.top}
               <span class="w-2 h-2 rounded-full shrink-0" style="background: {b.top_color};"></span>
@@ -177,19 +347,22 @@
             {:else}
               <span class="font-semibold opacity-70">No activity</span>
             {/if}
-            <span class="ml-auto pl-2 opacity-60 shrink-0">{period === "week" ? b.label : barLabel(b.label)}</span>
+            <span class="ml-auto pl-2 opacity-60 shrink-0">{b.label}</span>
           </div>
           <div class="flex items-center gap-1.5 whitespace-nowrap">
             <span class="w-2 h-2 rounded-[2px]" style="background: var(--color-accent);"></span>
             Focus <span class="ml-auto pl-3 tabular-nums font-medium">{fmtMin(b.focus_min)}</span>
           </div>
           <div class="flex items-center gap-1.5 whitespace-nowrap mt-0.5">
-            <span class="w-2 h-2 rounded-[2px]" style="background: #c2c6cf;"></span>
+            <span class="w-2 h-2 rounded-[2px]" style="background: {UNTR};"></span>
             Untracked <span class="ml-auto pl-3 tabular-nums font-medium">{fmtMin(b.untracked_min)}</span>
           </div>
         </div>
       {/if}
     </div>
+    {#if useTimeline && !compact}
+      <div class="text-[9px] text-ink-ghost text-center mt-1 select-none">scroll to zoom · drag to pan · double-click to reset</div>
+    {/if}
   {:else}
     <div class="grid place-items-center text-[12px] text-ink-faint" style="height: {H}px;">
       No activity tracked yet
@@ -198,7 +371,8 @@
 </div>
 
 <style>
-  /* Semi-transparent, frosted tooltip (asked for: see the chart faintly behind). */
+  .zoomable { cursor: zoom-in; }
+  .grabbing { cursor: grabbing; }
   .chart-tip {
     background: color-mix(in oklab, var(--color-ink) 55%, transparent);
     color: white;
@@ -208,8 +382,6 @@
     box-shadow: 0 8px 24px -8px rgba(0, 0, 0, 0.4);
     text-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
   }
-  /* Translucent frosted card for the Tasks hub: the window's blurred backdrop
-     reads through, so the chart floats on glass. */
   .chart-glass {
     background: rgba(255, 255, 255, 0.46);
     backdrop-filter: blur(8px) saturate(1.15);

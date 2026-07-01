@@ -11,15 +11,19 @@
   import { store, go, refreshSnapshot, refreshTasks } from "../store.svelte";
   import { taskDone } from "../sound";
   import { fmtMin, catColor } from "../format";
-  import type { Task, Bar } from "../types";
+  import type { Task, Bar, TimelineSpan } from "../types";
 
   // Today's activity, shown as a glass mini-chart under the day summary. Kept
   // live by refetching whenever today's tracked total ticks up.
   let dayBars = $state<Bar[]>([]);
+  let dayTimeline = $state<TimelineSpan[]>([]);
+  let dayEnd = $state(0);
   async function loadBars() {
     try {
       const d = await api.dashboard("day", 0);
       dayBars = d.bars;
+      dayTimeline = d.timeline;
+      dayEnd = d.day_end_min;
     } catch { /* dev / backend unavailable */ }
   }
   let lastTracked = -1;
@@ -327,7 +331,7 @@
       <!-- only the chart collapses -->
       <div class="card-body" class:closed={cardCollapsed}>
         <div class="mt-2.5 pt-2.5" style="border-top: 0.5px solid var(--line);">
-          <ActivityChart bars={dayBars} period="day" tone="bare" height={82} compact />
+          <ActivityChart bars={dayBars} timeline={dayTimeline} dayEndMin={dayEnd} period="day" tone="bare" height={82} compact />
         </div>
       </div>
 

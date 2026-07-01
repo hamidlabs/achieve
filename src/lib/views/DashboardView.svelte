@@ -4,10 +4,14 @@
   import Icon from "../icons/Icon.svelte";
   import Segmented from "../ui/Segmented.svelte";
   import ActivityChart from "../ui/ActivityChart.svelte";
+  import Markdown from "../ui/Markdown.svelte";
   import { api } from "../api";
   import { go } from "../store.svelte";
   import { fmtMin, appName, appColor, catColor } from "../format";
-  import type { Dashboard } from "../types";
+  import type { Dashboard, PlannedActual } from "../types";
+
+  // Click a task in the breakdown to read its full detail (description + apps).
+  let detail = $state<PlannedActual | null>(null);
 
   type Period = "day" | "week" | "month";
   let d = $state<Dashboard | null>(null);
@@ -146,23 +150,24 @@
         {@render tile("Completed", `${d.completed}/${d.total_tasks}`, "var(--color-accent-2)")}
       </div>
 
-      <!-- Hero activity area chart -->
-      <ActivityChart bars={d.bars} {period} />
+      <!-- Hero activity chart: real day timeline, bucketed for week/month -->
+      <ActivityChart bars={d.bars} timeline={d.timeline} dayEndMin={d.day_end_min} {period} />
 
       <!-- Breakdown columns -->
       <div class="grid grid-cols-3 gap-3">
         {@render column("Categories", "layout-dashboard", catRows)}
         {@render column("Applications", "layout-dashboard", appRows)}
 
-        <!-- Tasks: hover a row to see which apps the time went to -->
+        <!-- Tasks: click a row to read its description + where the time went -->
         <div class="panel rounded-[var(--radius-lg)] p-3.5 min-h-[176px]">
           <div class="text-[10.5px] font-semibold tracking-wide uppercase text-ink-faint mb-2.5 flex items-center gap-1.5">
             <Icon name="list-checks" size={12} /> Tasks
           </div>
           {#if tasks.length}
-            <div class="flex flex-col gap-2">
+            <div class="flex flex-col gap-0.5">
               {#each tasks.slice(0, 6) as p (p.title)}
-                <div class="relative group/task flex items-center gap-2 text-[12px]">
+                <button class="task-row no-drag flex items-center gap-2 text-[12px] text-left"
+                  onclick={() => (detail = p)} title={p.untracked ? "" : "View details"}>
                   <span class="tabular-nums text-ink-faint w-7 text-right">
                     {Math.round((p.tracked_min / taskTotal) * 100)}%
                   </span>
@@ -172,25 +177,11 @@
                       style="width: {(p.tracked_min / taskTotal) * 100}%; background: {p.untracked ? '#c2c6cf' : catColor(p.color)};"></div>
                   </div>
                   <span class="flex-1 min-w-0 truncate {p.untracked ? 'text-ink-faint italic' : 'text-ink-soft'}">{p.title}</span>
-                  <span class="tabular-nums text-ink-faint shrink-0">{fmtMin(p.tracked_min)}</span>
-
-                  {#if p.apps.length}
-                    <div class="hidden group-hover/task:block absolute bottom-full left-6 mb-1 z-30 min-w-[160px]
-                                rounded-[var(--radius-md)] px-2.5 py-2 shadow-lg"
-                      style="background: white; border: 0.5px solid var(--line-strong);">
-                      <div class="text-[9.5px] uppercase tracking-wide text-ink-faint mb-1.5">Apps used</div>
-                      <div class="flex flex-col gap-1">
-                        {#each p.apps as a (a.app)}
-                          <div class="flex items-center gap-1.5 text-[11px] whitespace-nowrap">
-                            <span class="w-2 h-2 rounded-full shrink-0" style="background: {appColor(a.app)};"></span>
-                            <span class="text-ink-soft">{appName(a.app)}</span>
-                            <span class="ml-auto pl-3 tabular-nums text-ink-faint">{fmtMin(a.minutes)}</span>
-                          </div>
-                        {/each}
-                      </div>
-                    </div>
+                  {#if !p.untracked && p.body_md.trim()}
+                    <Icon name="book-open" size={11} class="text-ink-ghost shrink-0" />
                   {/if}
-                </div>
+                  <span class="tabular-nums text-ink-faint shrink-0">{fmtMin(p.tracked_min)}</span>
+                </button>
               {/each}
             </div>
           {:else}
@@ -203,6 +194,50 @@
     <div class="grid place-items-center h-full text-ink-faint text-[13px]">No data yet.</div>
   {/if}
 </WindowFrame>
+
+{#if detail}
+  {@const p = detail}
+  <button class="catch no-drag" aria-label="Close" onclick={() => (detail = null)}></button>
+  <div class="detail no-drag">
+    <div class="flex items-start gap-2.5 mb-3">
+      <span class="w-2.5 h-2.5 rounded-full shrink-0 mt-1.5" style="background: {p.untracked ? '#9aa0aa' : catColor(p.color)};"></span>
+      <div class="flex-1 min-w-0">
+        <div class="text-[14px] font-semibold text-ink leading-snug">{p.title}</div>
+        <div class="text-[11px] text-ink-faint mt-0.5 flex items-center gap-1.5 flex-wrap">
+          {#if p.category}<span>{p.category}</span><span class="text-ink-ghost">·</span>{/if}
+          <span class="tabular-nums">{fmtMin(p.tracked_min)} tracked{#if p.estimate_min} of ~{fmtMin(p.estimate_min)}{/if}</span>
+          {#if p.done}<span class="done-chip"><Icon name="check" size={10} /> Done</span>{/if}
+        </div>
+      </div>
+      <button class="icon-btn shrink-0" aria-label="Close" onclick={() => (detail = null)}><Icon name="x" size={16} /></button>
+    </div>
+
+    <div class="detail-body">
+      {#if p.untracked}
+        <p class="text-[12.5px] text-ink-faint">Active time that wasn't tracked against any task.</p>
+      {:else if p.body_md.trim()}
+        <Markdown source={p.body_md} />
+      {:else}
+        <p class="text-[12.5px] text-ink-ghost italic">No description.</p>
+      {/if}
+
+      {#if p.apps.length}
+        <div class="mt-3.5 pt-3" style="border-top: 0.5px solid var(--line);">
+          <div class="text-[9.5px] uppercase tracking-wide text-ink-faint mb-2">Where the time went</div>
+          <div class="flex flex-col gap-1.5">
+            {#each p.apps as a (a.app)}
+              <div class="flex items-center gap-1.5 text-[12px]">
+                <span class="w-2 h-2 rounded-full shrink-0" style="background: {appColor(a.app)};"></span>
+                <span class="text-ink-soft">{appName(a.app)}</span>
+                <span class="ml-auto pl-3 tabular-nums text-ink-faint">{fmtMin(a.minutes)}</span>
+              </div>
+            {/each}
+          </div>
+        </div>
+      {/if}
+    </div>
+  </div>
+{/if}
 
 {#snippet tile(label: string, value: string, color: string)}
   <div class="panel-raised rounded-[var(--radius-md)] px-3.5 py-3">
@@ -243,6 +278,58 @@
 {/snippet}
 
 <style>
+  /* Clickable task row in the breakdown column. */
+  .task-row {
+    width: 100%;
+    padding: 4px 6px;
+    margin: 0 -6px;
+    border-radius: 7px;
+    transition: background 0.12s ease;
+  }
+  .task-row:hover {
+    background: color-mix(in oklab, var(--color-ink) 4%, transparent);
+  }
+  .done-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    font-size: 9.5px;
+    font-weight: 600;
+    color: var(--color-positive);
+    background: color-mix(in oklab, var(--color-positive) 12%, white);
+    padding: 1px 6px;
+    border-radius: 999px;
+  }
+  /* Task detail card: centered over a transparent catcher (no dark scrim). */
+  .catch {
+    position: fixed;
+    inset: 0;
+    z-index: 40;
+    background: transparent;
+    cursor: default;
+  }
+  .detail {
+    position: fixed;
+    z-index: 50;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    width: 420px;
+    max-width: calc(100vw - 32px);
+    max-height: calc(100vh - 48px);
+    display: flex;
+    flex-direction: column;
+    background: linear-gradient(170deg, var(--glass-top), var(--glass-bot));
+    border: 0.5px solid var(--line-strong);
+    border-radius: var(--radius-lg);
+    box-shadow: 0 18px 50px -14px rgba(0, 0, 0, 0.42);
+    padding: 16px;
+    animation: fade 0.16s ease both;
+  }
+  .detail-body {
+    overflow-y: auto;
+    min-height: 0;
+  }
   .nav-btn {
     display: grid;
     place-items: center;

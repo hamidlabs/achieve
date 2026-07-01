@@ -93,6 +93,8 @@ export interface AppStat {
 export interface PlannedActual {
   title: string;
   color: string;
+  category: string;
+  body_md: string;
   estimate_min: number;
   tracked_min: number;
   done: boolean;
@@ -110,6 +112,14 @@ export interface Bar {
 
 export type DashPeriod = "day" | "week" | "month";
 
+export interface TimelineSpan {
+  start_min: number;
+  end_min: number;
+  focus: boolean;
+  label: string;
+  color: string;
+}
+
 export interface Dashboard {
   period: DashPeriod;
   start_date: string;
@@ -123,4 +133,6 @@ export interface Dashboard {
   by_app: AppStat[];
   planned_actual: PlannedActual[];
   bars: Bar[];
+  timeline: TimelineSpan[];
+  day_end_min: number;
 }

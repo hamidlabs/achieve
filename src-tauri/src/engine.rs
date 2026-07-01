@@ -33,6 +33,7 @@ pub fn spawn(app: AppHandle, db: Arc<Mutex<Connection>>, idle_flag: PathBuf, idl
         let mut last_nudge: Option<Instant> = None;
         let mut was_idle = false;
         let mut last_break_prompt: Option<Instant> = None;
+        let mut current_day = String::new();
 
         loop {
             let snap = match db.lock().ok().and_then(|c| db::snapshot(&c).ok()) {
@@ -43,6 +44,22 @@ pub fn spawn(app: AppHandle, db: Arc<Mutex<Connection>>, idle_flag: PathBuf, idl
                 }
             };
             let _ = app.emit("snapshot", &snap);
+
+            // Day rollover: when the local day changes (or at startup, catching a
+            // launch after midnight), stop any tracking that crossed midnight and
+            // surface yesterday's leftover task on today's list.
+            let day = db.lock().ok().map(|c| db::today(&c)).unwrap_or_default();
+            if !day.is_empty() && day != current_day {
+                current_day = day;
+                if let Ok(c) = db.lock() {
+                    if db::rollover_day(&c).unwrap_or(false) {
+                        if let Ok(s) = db::snapshot(&c) {
+                            let _ = app.emit("snapshot", &s);
+                        }
+                        let _ = app.emit("tasks-changed", ());
+                    }
+                }
+            }
 
             let visible = app
                 .get_webview_window("main")

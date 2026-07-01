@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { listen } from "@tauri-apps/api/event";
-  import { store, refreshAll } from "./lib/store.svelte";
+  import { store, refreshAll, refreshTasks } from "./lib/store.svelte";
   import { initSound } from "./lib/sound";
   import type { Snapshot, View } from "./lib/types";
   import TasksView from "./lib/views/TasksView.svelte";
@@ -20,9 +20,14 @@
     const unSnap = listen<Snapshot>("snapshot", (e) => {
       store.snapshot = e.payload;
     });
+    // The backend changed the task list (e.g. day rollover) — refetch it.
+    const unTasks = listen("tasks-changed", () => {
+      refreshTasks();
+    });
     return () => {
       unNav.then((f) => f());
       unSnap.then((f) => f());
+      unTasks.then((f) => f());
     };
   });
 </script>

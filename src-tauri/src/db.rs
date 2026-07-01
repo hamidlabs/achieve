@@ -19,7 +19,7 @@ use std::path::Path;
 
 use crate::model::{
     AppStat, Bar, BreakSettings, CategoryStat, Dashboard, DayPlan, FocusSpan, PlannedActual,
-    Snapshot, Task,
+    Snapshot, Task, TimelineSpan,
 };
 
 pub fn open(path: &Path) -> Result<Connection> {
@@ -210,6 +210,39 @@ pub fn pause_for_idle(conn: &Connection, idle_secs: i64) -> Result<bool> {
     Ok(closed_seg > 0 || closed_focus > 0)
 }
 
+/// Day boundary: tracking must not bleed across midnight. Cap any segment/focus
+/// span still open from a previous local day at the midnight that ended that day
+/// (so yesterday's time stays in yesterday), and pause any task left
+/// in_progress/awaiting from a past day, rolling its plan_date to today so it
+/// stops accruing and reappears on today's list to resume. Runs at the day
+/// change and at startup (covers the app being launched after midnight).
+pub fn rollover_day(conn: &Connection) -> Result<bool> {
+    let day = today(conn);
+    let cap_to = "datetime(date(start_at,'localtime','+1 day'),'utc')";
+    let capped = conn.execute(
+        &format!(
+            "UPDATE segments
+                SET end_at = {cap_to},
+                    reason = CASE WHEN COALESCE(reason,'')='' THEN 'day-rollover' ELSE reason END
+              WHERE end_at IS NULL AND date(start_at,'localtime') < ?1"
+        ),
+        params![day],
+    )?;
+    let _ = conn.execute(
+        &format!(
+            "UPDATE focus_log SET end_at = {cap_to}
+              WHERE end_at IS NULL AND date(start_at,'localtime') < ?1"
+        ),
+        params![day],
+    )?;
+    let rolled = conn.execute(
+        "UPDATE tasks SET status='paused', plan_date=?1, updated_at=?2
+          WHERE status IN ('in_progress','awaiting') AND plan_date IS NOT NULL AND plan_date < ?1",
+        params![day, now()],
+    )?;
+    Ok(capped > 0 || rolled > 0)
+}
+
 /// Roll daily recurring tasks into today: if a 'daily' task is from a previous
 /// day (or unscheduled), reset it to pending for today. One row per recurring
 /// task, reappearing each day; per-day time lives in segments.
@@ -229,7 +262,7 @@ fn now() -> String {
 // "today"/"tomorrow" and all wall-clock math go through SQLite's localtime,
 // which uses the OS timezone reliably. chrono::Local mis-resolved the timezone
 // inside the AppImage, so we do NOT use it for dates.
-fn today(conn: &Connection) -> String {
+pub fn today(conn: &Connection) -> String {
     conn.query_row("SELECT date('now','localtime')", [], |r| r.get(0))
         .unwrap_or_default()
 }
@@ -1162,7 +1195,8 @@ pub fn dashboard(conn: &Connection, period: &str, offset: i64) -> Result<Dashboa
     let mut planned_actual: Vec<PlannedActual> = {
         // Every task worked on in the window, by time spent.
         let sql = format!(
-            "SELECT t.id, t.title, COALESCE(c.color,'#9aa0aa'), COALESCE(t.estimate_min,0), t.status,
+            "SELECT t.id, t.title, COALESCE(c.color,'#9aa0aa'), COALESCE(c.name,''), COALESCE(t.body_md,''),
+                    COALESCE(t.estimate_min,0), t.status,
                     (SELECT COALESCE({seg_minutes},0) FROM segments s WHERE s.task_id=t.id AND {seg_s}) AS tracked
              FROM tasks t LEFT JOIN categories c ON c.id=t.category_id
              WHERE EXISTS (SELECT 1 FROM segments s WHERE s.task_id=t.id AND {seg_s})
@@ -1170,26 +1204,30 @@ pub fn dashboard(conn: &Connection, period: &str, offset: i64) -> Result<Dashboa
         );
         let mut stmt = conn.prepare(&sql)?;
         let map = |r: &rusqlite::Row| {
-            let status: String = r.get(4)?;
+            let status: String = r.get(6)?;
             Ok((
                 r.get::<_, i64>(0)?,
                 r.get::<_, String>(1)?,
                 r.get::<_, String>(2)?,
-                r.get::<_, i64>(3)?,
-                status == "completed",
+                r.get::<_, String>(3)?,
+                r.get::<_, String>(4)?,
                 r.get::<_, i64>(5)?,
+                status == "completed",
+                r.get::<_, i64>(7)?,
             ))
         };
-        let rows: Vec<(i64, String, String, i64, bool, i64)> =
+        let rows: Vec<(i64, String, String, String, String, i64, bool, i64)> =
             stmt.query_map(params![n], map)?.collect::<std::result::Result<_, _>>()?;
         rows.into_iter()
-            .map(|(id, title, color, estimate_min, done, tracked_min)| {
+            .map(|(id, title, color, category, body_md, estimate_min, done, tracked_min)| {
                 let mut apps = task_apps.remove(&id).unwrap_or_default();
                 apps.sort_by(|a, b| b.minutes.cmp(&a.minutes));
                 apps.truncate(6);
                 PlannedActual {
                     title,
                     color,
+                    category,
+                    body_md,
                     estimate_min,
                     tracked_min,
                     done,
@@ -1205,6 +1243,8 @@ pub fn dashboard(conn: &Connection, period: &str, offset: i64) -> Result<Dashboa
         planned_actual.push(PlannedActual {
             title: "Untracked".into(),
             color: "#9aa0aa".into(),
+            category: String::new(),
+            body_md: String::new(),
             estimate_min: 0,
             tracked_min: untracked_min,
             done: false,
@@ -1227,6 +1267,8 @@ pub fn dashboard(conn: &Connection, period: &str, offset: i64) -> Result<Dashboa
     // hero chart: focus (tracked) vs untracked per bucket -> per-hour (day) or
     // per-day (week).
     let mut bars = Vec::new();
+    let mut timeline: Vec<TimelineSpan> = Vec::new();
+    let mut day_end_min: i64 = 0;
     if period != "day" {
         // One bar per day across the window (week = 7, month = 28..31).
         let days: i64 = conn.query_row(
@@ -1340,6 +1382,70 @@ pub fn dashboard(conn: &Connection, period: &str, offset: i64) -> Result<Dashboa
                 top_color,
             });
         }
+
+        // Real sessions on the day timeline: each tracked segment (focus, with
+        // its category color) and each untracked focus_log span, placed at its
+        // exact local start/end minute. start_min from the clock; end_min via
+        // duration so an overnight span clamps at midnight (1440) instead of
+        // wrapping. Then merge same-kind, same-color spans separated by <=2 min.
+        let min_of = |col: &str| {
+            format!("CAST(strftime('%H',{col},'localtime') AS INTEGER)*60 + CAST(strftime('%M',{col},'localtime') AS INTEGER)")
+        };
+        let mut raw: Vec<TimelineSpan> = Vec::new();
+        {
+            let seg_min = min_of("s.start_at");
+            let mut stmt = conn.prepare(&format!(
+                "SELECT {seg_min} AS smin,
+                        CAST(round((julianday(COALESCE(s.end_at,?1))-julianday(s.start_at))*1440) AS INTEGER) AS dur,
+                        COALESCE(c.name,'Uncategorized'), COALESCE(c.color,'#9aa0aa')
+                 FROM segments s JOIN tasks t ON t.id=s.task_id LEFT JOIN categories c ON c.id=t.category_id
+                 WHERE date(s.start_at,'localtime')='{start_date}'
+                 ORDER BY s.start_at"
+            ))?;
+            let rows = stmt.query_map(params![n], |r| {
+                Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?))
+            })?;
+            for row in rows {
+                let (s, dur, name, color) = row?;
+                raw.push(TimelineSpan { start_min: s, end_min: (s + dur.max(0)).min(1440), focus: true, label: name, color });
+            }
+        }
+        {
+            let fl_min = min_of("start_at");
+            let mut stmt = conn.prepare(&format!(
+                "SELECT {fl_min} AS smin,
+                        CAST(round((julianday(COALESCE(end_at,?1))-julianday(start_at))*1440) AS INTEGER) AS dur
+                 FROM focus_log
+                 WHERE date(start_at,'localtime')='{start_date}' AND task_id IS NULL AND {not_us}
+                 ORDER BY start_at"
+            ))?;
+            let rows = stmt.query_map(params![n], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?)))?;
+            for row in rows {
+                let (s, dur) = row?;
+                raw.push(TimelineSpan { start_min: s, end_min: (s + dur.max(0)).min(1440), focus: false, label: "Untracked".into(), color: "#c2c6cf".into() });
+            }
+        }
+        raw.sort_by_key(|s| s.start_min);
+        for s in raw {
+            match timeline.last_mut() {
+                Some(prev)
+                    if prev.focus == s.focus
+                        && prev.color == s.color
+                        && s.start_min - prev.end_min <= 2 =>
+                {
+                    prev.end_min = prev.end_min.max(s.end_min);
+                }
+                _ => timeline.push(s),
+            }
+        }
+        // Drop blocks that are still under a minute after merging (instant blips).
+        timeline.retain(|s| s.end_min - s.start_min >= 1);
+
+        // x-axis right edge = the stop time (default 6pm), extended past it if
+        // activity ran later. Start is always midnight (0).
+        let stop_min = stop_hhmm.as_deref().and_then(parse_hhmm_min).unwrap_or(18 * 60);
+        let last_end = timeline.iter().map(|s| s.end_min).max().unwrap_or(0);
+        day_end_min = stop_min.max(last_end).clamp(60, 1440);
     }
 
     Ok(Dashboard {
@@ -1355,6 +1461,8 @@ pub fn dashboard(conn: &Connection, period: &str, offset: i64) -> Result<Dashboa
         by_app,
         planned_actual,
         bars,
+        timeline,
+        day_end_min,
     })
 }
 
