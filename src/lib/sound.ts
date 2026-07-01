@@ -1,7 +1,11 @@
-// Gentle synthesized chimes for app events (breaks, task completion). Uses the
-// Web Audio API so there are no binary assets to bundle: each cue is a short
-// bell-like blend of sine partials with a soft envelope, run through a lowpass
-// for warmth. Designed to be calm and unobtrusive, never jarring.
+// App event cues. Break and warning cues use real audio assets (bundled via
+// Vite, so their URLs are hashed and resolved at build time). Task completion
+// stays a tiny synthesized tick (no asset supplied for it) via the Web Audio
+// API. Everything respects the shared mute flag and unlocks on first gesture.
+
+import preBreakUrl from "../assets/sounds/on_pre_break.wav";
+import stopBreakUrl from "../assets/sounds/on_stop_break.wav";
+import warningUrl from "../assets/sounds/warning.mp3";
 
 let ctx: AudioContext | null = null;
 let muted = false;
@@ -18,8 +22,35 @@ function context(): AudioContext | null {
   }
 }
 
+// Preloaded <audio> elements for the file-based cues, keyed by source URL.
+const clips = new Map<string, HTMLAudioElement>();
+function clip(url: string): HTMLAudioElement | null {
+  if (typeof window === "undefined") return null;
+  let el = clips.get(url);
+  if (!el) {
+    el = new Audio(url);
+    el.preload = "auto";
+    clips.set(url, el);
+  }
+  return el;
+}
+
+/** Play a bundled audio file from its start, honoring mute. */
+function playFile(url: string, volume = 1): void {
+  if (muted) return;
+  const el = clip(url);
+  if (!el) return;
+  try {
+    el.currentTime = 0;
+    el.volume = volume;
+    void el.play();
+  } catch {
+    /* autoplay/gesture restrictions: ignore */
+  }
+}
+
 /** Wire up mute state and unlock audio on the first user interaction (some
- *  webviews start the AudioContext suspended until a gesture). */
+ *  webviews start audio suspended/blocked until a gesture). */
 export function initSound(): void {
   if (typeof window === "undefined") return;
   try {
@@ -27,7 +58,11 @@ export function initSound(): void {
   } catch {
     /* private mode / no storage */
   }
-  const unlock = () => context();
+  const unlock = () => {
+    context();
+    // Prime the file clips so the first real cue plays without delay.
+    for (const url of [preBreakUrl, stopBreakUrl, warningUrl]) clip(url)?.load();
+  };
   window.addEventListener("pointerdown", unlock, { once: true, passive: true });
   window.addEventListener("keydown", unlock, { once: true });
 }
@@ -78,22 +113,19 @@ function play(notes: Note[]): void {
   }
 }
 
-/** Calm descending chime: time to step away and rest. */
+/** Time to step away and rest: the break prompt has appeared. */
 export function breakStart(): void {
-  play([
-    { f: 659.25, t: 0, d: 0.95, g: 0.13 }, // E5
-    { f: 493.88, t: 0.18, d: 1.15, g: 0.16 }, // B4
-    { f: 987.77, t: 0.18, d: 1.0, g: 0.035 }, // soft octave shimmer
-  ]);
+  playFile(preBreakUrl);
 }
 
-/** Bright ascending arpeggio: rested, back to work. */
+/** Rested, back to work: the break has finished. */
 export function breakOver(): void {
-  play([
-    { f: 523.25, t: 0, d: 0.5, g: 0.12 }, // C5
-    { f: 659.25, t: 0.12, d: 0.5, g: 0.12 }, // E5
-    { f: 783.99, t: 0.24, d: 0.75, g: 0.15 }, // G5
-  ]);
+  playFile(stopBreakUrl);
+}
+
+/** Nudge when no task is being tracked. */
+export function noTaskWarning(): void {
+  playFile(warningUrl);
 }
 
 /** Subtle, satisfying tick for completing a task. */
