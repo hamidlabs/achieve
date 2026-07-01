@@ -1,11 +1,11 @@
-// App event cues. Break and warning cues use real audio assets (bundled via
-// Vite, so their URLs are hashed and resolved at build time). Task completion
-// stays a tiny synthesized tick (no asset supplied for it) via the Web Audio
-// API. Everything respects the shared mute flag and unlocks on first gesture.
+// App event cues. Break and warning cues are played by the Rust backend through
+// the system audio: WebKitGTK (the Tauri webview on Linux) does not reliably
+// output in-page audio (neither <audio> nor Web Audio), so anything played in
+// the webview is silent. Task completion stays a tiny synthesized Web Audio tick
+// (no asset supplied for it, and it's non-essential). Everything respects the
+// shared mute flag.
 
-import preBreakUrl from "../assets/sounds/on_pre_break.wav";
-import stopBreakUrl from "../assets/sounds/on_stop_break.wav";
-import warningUrl from "../assets/sounds/warning.mp3";
+import { invoke } from "@tauri-apps/api/core";
 
 let ctx: AudioContext | null = null;
 let muted = false;
@@ -22,49 +22,16 @@ function context(): AudioContext | null {
   }
 }
 
-// File cues are decoded into the AudioContext and played as buffers, NOT via
-// <audio> elements. WebKitGTK (the Tauri webview on Linux) blocks
-// HTMLAudioElement.play() outside a direct click handler, so timer/effect-driven
-// cues get silently dropped. Web Audio playback is exempt once the context has
-// been resumed by a gesture, which is exactly what initSound() arranges.
-const buffers = new Map<string, AudioBuffer>();
-async function decode(url: string): Promise<void> {
-  const c = context();
-  if (!c || buffers.has(url)) return;
-  try {
-    const res = await fetch(url);
-    const data = await res.arrayBuffer();
-    buffers.set(url, await c.decodeAudioData(data));
-  } catch {
-    /* asset missing / decode failure: leave uncached, playFile no-ops */
-  }
-}
-
-/** Play a decoded cue from its start, honoring mute. Decodes on demand if the
- *  buffer wasn't primed yet (first play may be a beat late, then it's instant). */
-function playFile(url: string, volume = 1): void {
+/** Ask the Rust backend to play a bundled cue, honoring mute. */
+function playCue(name: "pre_break" | "stop_break" | "warning"): void {
   if (muted) return;
-  const c = context();
-  if (!c) return;
-  const buf = buffers.get(url);
-  if (!buf) {
-    void decode(url).then(() => {
-      if (!muted && buffers.has(url)) playFile(url, volume);
-    });
-    return;
-  }
-  const src = c.createBufferSource();
-  src.buffer = buf;
-  const g = c.createGain();
-  g.gain.value = volume;
-  src.connect(g);
-  g.connect(c.destination);
-  src.start();
+  void invoke("play_sound", { name }).catch(() => {
+    /* backend unavailable (dev/browser): ignore */
+  });
 }
 
-/** Wire up mute state and unlock audio on the first user interaction (WebKitGTK
- *  starts the AudioContext suspended until a gesture). Also decodes the file
- *  cues up front so the first real cue plays without delay. */
+/** Wire up mute state and unlock the Web Audio context (used by taskDone) on the
+ *  first user interaction; some webviews start it suspended until a gesture. */
 export function initSound(): void {
   if (typeof window === "undefined") return;
   try {
@@ -72,10 +39,7 @@ export function initSound(): void {
   } catch {
     /* private mode / no storage */
   }
-  const unlock = () => {
-    context();
-    for (const url of [preBreakUrl, stopBreakUrl, warningUrl]) void decode(url);
-  };
+  const unlock = () => context();
   window.addEventListener("pointerdown", unlock, { once: true, passive: true });
   window.addEventListener("keydown", unlock, { once: true });
 }
@@ -128,17 +92,17 @@ function play(notes: Note[]): void {
 
 /** Time to step away and rest: the break prompt has appeared. */
 export function breakStart(): void {
-  playFile(preBreakUrl);
+  playCue("pre_break");
 }
 
 /** Rested, back to work: the break has finished. */
 export function breakOver(): void {
-  playFile(stopBreakUrl);
+  playCue("stop_break");
 }
 
 /** Nudge when no task is being tracked. */
 export function noTaskWarning(): void {
-  playFile(warningUrl);
+  playCue("warning");
 }
 
 /** Subtle, satisfying tick for completing a task. */

@@ -12,6 +12,7 @@ mod idle;
 mod model;
 mod niri;
 mod shutdown;
+mod sound;
 mod window;
 
 use std::sync::{Arc, Mutex};
@@ -134,6 +135,7 @@ pub fn run() {
             commands::dismiss_popup,
             commands::quit_app,
             commands::send_summary_now,
+            commands::play_sound,
         ])
         .run(tauri::generate_context!())
         .expect("error while running achieve");

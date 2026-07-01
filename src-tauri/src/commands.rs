@@ -279,3 +279,10 @@ pub fn send_summary_now(state: State<'_, AppState>, offset: Option<i64>) -> CmdR
     }
     Ok(format!("Sent \"{}\" to {}", payload.subject, payload.to))
 }
+
+/// Play a named audio cue ("pre_break" | "stop_break" | "warning") through the
+/// system audio. Fire-and-forget: the frontend gates this on its mute flag.
+#[tauri::command]
+pub fn play_sound(name: String) {
+    crate::sound::play(&name);
+}
