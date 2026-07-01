@@ -91,6 +91,24 @@
   const tasks = $derived(d ? d.planned_actual.filter((p) => p.tracked_min > 0) : []);
   const taskTotal = $derived(Math.max(1, tasks.reduce((s, p) => s + p.tracked_min, 0)));
 
+  // Friendly labels for the reasons the app sets on its own.
+  const AUTO_PAUSE_LABELS: Record<string, string> = {
+    "auto-idle": "Went idle",
+    "auto-suspend": "System asleep",
+    "day-rollover": "Rolled to next day",
+    "reached-estimate": "Reached estimate",
+    "rescheduled": "Rescheduled",
+    "deleted": "Deleted",
+    "break-start": "Break started",
+    "break-end": "Break ended",
+    "capped-suspend": "Capped after suspend",
+    "capped-runaway": "Capped runaway timer",
+  };
+  const pauseLabel = (r: string, auto: boolean) =>
+    auto ? (AUTO_PAUSE_LABELS[r] ?? r) : r;
+  // Total pauses across all reasons for the open detail (drives the header count).
+  const pauseTotal = $derived(detail ? detail.pauses.reduce((s, p) => s + p.count, 0) : 0);
+
 </script>
 
 <WindowFrame title="History" subtitle={rangeLabel} icon="pie-chart" onClose={() => api.dismiss()}>
@@ -203,9 +221,11 @@
       <span class="w-2.5 h-2.5 rounded-full shrink-0 mt-1.5" style="background: {p.untracked ? '#9aa0aa' : catColor(p.color)};"></span>
       <div class="flex-1 min-w-0">
         <div class="text-[14px] font-semibold text-ink leading-snug">{p.title}</div>
-        <div class="text-[11px] text-ink-faint mt-0.5 flex items-center gap-1.5 flex-wrap">
-          {#if p.category}<span>{p.category}</span><span class="text-ink-ghost">·</span>{/if}
-          <span class="tabular-nums">{fmtMin(p.tracked_min)} tracked{#if p.estimate_min} of ~{fmtMin(p.estimate_min)}{/if}</span>
+        <div class="text-[11px] text-ink-faint mt-1 flex items-center gap-1.5 flex-wrap">
+          {#if p.category}
+            <span class="cat-badge" style="--c: {catColor(p.color)}">{p.category}</span>
+          {/if}
+          <span class="tabular-nums">{fmtMin(p.tracked_min)} tracked{#if p.estimate_min}{" of ~" + fmtMin(p.estimate_min)}{/if}</span>
           {#if p.done}<span class="done-chip"><Icon name="check" size={10} /> Done</span>{/if}
         </div>
       </div>
@@ -230,6 +250,27 @@
                 <span class="w-2 h-2 rounded-full shrink-0" style="background: {appColor(a.app)};"></span>
                 <span class="text-ink-soft">{appName(a.app)}</span>
                 <span class="ml-auto pl-3 tabular-nums text-ink-faint">{fmtMin(a.minutes)}</span>
+              </div>
+            {/each}
+          </div>
+        </div>
+      {/if}
+
+      {#if p.pauses.length}
+        <div class="mt-3.5 pt-3" style="border-top: 0.5px solid var(--line);">
+          <div class="flex items-center gap-1.5 mb-2">
+            <div class="text-[9.5px] uppercase tracking-wide text-ink-faint">Pauses</div>
+            <span class="pause-total tabular-nums">{pauseTotal}</span>
+          </div>
+          <div class="flex flex-col gap-1.5">
+            {#each p.pauses as pz (pz.reason)}
+              <div class="pause-row" class:auto={pz.auto}>
+                <Icon name="pause" size={11} class="shrink-0" fill={!pz.auto} />
+                <span class="pause-reason">{pauseLabel(pz.reason, pz.auto)}</span>
+                {#if pz.auto}<span class="pause-tag">auto</span>{/if}
+                {#if pz.count > 1}
+                  <span class="ml-auto pl-3 tabular-nums pause-count">×{pz.count}</span>
+                {/if}
               </div>
             {/each}
           </div>
@@ -299,6 +340,65 @@
     background: color-mix(in oklab, var(--color-positive) 12%, white);
     padding: 1px 6px;
     border-radius: 999px;
+  }
+  /* Category pill, tinted with the category's own color. */
+  .cat-badge {
+    display: inline-flex;
+    align-items: center;
+    font-size: 10px;
+    font-weight: 600;
+    line-height: 1;
+    padding: 3px 8px;
+    border-radius: 999px;
+    color: color-mix(in oklab, var(--c) 68%, var(--color-ink));
+    background: color-mix(in oklab, var(--c) 14%, white);
+    border: 0.5px solid color-mix(in oklab, var(--c) 32%, transparent);
+    white-space: nowrap;
+  }
+  /* Total-pauses count next to the "Pauses" heading. */
+  .pause-total {
+    font-size: 9.5px;
+    font-weight: 700;
+    color: var(--color-ink-soft);
+    background: color-mix(in oklab, var(--color-ink) 8%, transparent);
+    padding: 0 6px;
+    min-width: 18px;
+    height: 15px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 999px;
+  }
+  .pause-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: var(--color-ink-soft);
+  }
+  /* Automatic pauses read quieter than the user's own notes. */
+  .pause-row.auto {
+    color: var(--color-ink-faint);
+  }
+  .pause-reason {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .pause-tag {
+    font-size: 8.5px;
+    font-weight: 600;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+    color: var(--color-ink-ghost);
+    border: 0.5px solid var(--line);
+    border-radius: 4px;
+    padding: 0 4px;
+    line-height: 14px;
+  }
+  .pause-count {
+    color: var(--color-ink-faint);
   }
   /* Task detail card: centered over a transparent catcher (no dark scrim). */
   .catch {

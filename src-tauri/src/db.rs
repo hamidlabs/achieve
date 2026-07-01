@@ -18,8 +18,8 @@ use rusqlite::{params, Connection};
 use std::path::Path;
 
 use crate::model::{
-    AppStat, Bar, BreakSettings, CategoryStat, Dashboard, DayPlan, FocusSpan, PlannedActual,
-    Snapshot, Task, TimelineSpan,
+    AppStat, Bar, BreakSettings, CategoryStat, Dashboard, DayPlan, FocusSpan, PauseStat,
+    PlannedActual, Snapshot, Task, TimelineSpan,
 };
 
 pub fn open(path: &Path) -> Result<Connection> {
@@ -250,7 +250,7 @@ fn ensure_recurring(conn: &Connection) -> Result<()> {
     let day = today(conn);
     conn.execute(
         "UPDATE tasks SET status = 'pending', plan_date = ?1, updated_at = ?2
-         WHERE recurrence = 'daily' AND (plan_date IS NULL OR plan_date < ?1)",
+         WHERE recurrence = 'daily' AND status <> 'deleted' AND (plan_date IS NULL OR plan_date < ?1)",
         params![day, now()],
     )?;
     Ok(())
@@ -287,14 +287,36 @@ fn local_hour(conn: &Connection) -> i64 {
     .unwrap_or(12)
 }
 
-fn tracked_minutes(conn: &Connection, task_id: i64) -> Result<i64> {
+/// Total minutes tracked against a task. `today_only` restricts the sum to
+/// segments that STARTED today (local) so a recurring daily task, which reuses
+/// the same row every day, shows its progress against the DAILY estimate and
+/// resets at local midnight instead of accumulating forever.
+fn tracked_minutes(conn: &Connection, task_id: i64, today_only: bool) -> Result<i64> {
+    let day_pred = if today_only {
+        " AND date(start_at,'localtime')=date('now','localtime')"
+    } else {
+        ""
+    };
     let secs: i64 = conn.query_row(
-        "SELECT COALESCE(SUM(CAST((julianday(COALESCE(end_at, ?1)) - julianday(start_at)) * 86400 AS INTEGER)), 0)
-         FROM segments WHERE task_id = ?2",
+        &format!(
+            "SELECT COALESCE(SUM(CAST((julianday(COALESCE(end_at, ?1)) - julianday(start_at)) * 86400 AS INTEGER)), 0)
+             FROM segments WHERE task_id = ?2{day_pred}"
+        ),
         params![now(), task_id],
         |r| r.get(0),
     )?;
     Ok(secs / 60)
+}
+
+/// True when the task is a recurring daily task (its estimate is a per-day
+/// target, so tracked time is scoped to today).
+fn is_daily(conn: &Connection, task_id: i64) -> bool {
+    conn.query_row(
+        "SELECT recurrence='daily' FROM tasks WHERE id=?1",
+        params![task_id],
+        |r| r.get(0),
+    )
+    .unwrap_or(false)
 }
 
 pub fn create_category(conn: &Connection, name: &str, color: &str) -> Result<i64> {
@@ -339,7 +361,7 @@ pub fn list_tasks(conn: &Connection) -> Result<Vec<Task>> {
                t.estimate_min, t.status, t.recurrence, t.plan_date
         FROM tasks t LEFT JOIN categories c ON c.id = t.category_id
         WHERE (t.plan_date = ?1 OR t.plan_date IS NULL)
-          AND t.status <> 'break' AND t.id <> COALESCE(?2, -1)
+          AND t.status <> 'break' AND t.status <> 'deleted' AND t.id <> COALESCE(?2, -1)
         ORDER BY
             CASE t.status WHEN 'in_progress' THEN 0 WHEN 'paused' THEN 1
                 WHEN 'pending' THEN 2 WHEN 'reopened' THEN 2 ELSE 4 END,
@@ -365,7 +387,7 @@ pub fn list_tasks(conn: &Connection) -> Result<Vec<Task>> {
     let mut tasks = Vec::new();
     for row in rows {
         let (id, cid, cname, ccolor, title, body, est, status, rec, plan) = row?;
-        let tracked_min = tracked_minutes(conn, id)?;
+        let tracked_min = tracked_minutes(conn, id, rec.as_deref() == Some("daily"))?;
         tasks.push(Task {
             id,
             category_id: cid,
@@ -414,7 +436,7 @@ pub fn list_upcoming(conn: &Connection) -> Result<Vec<Task>> {
     let mut tasks = Vec::new();
     for row in rows {
         let (id, cid, cname, ccolor, title, body, est, status, rec, plan) = row?;
-        let tracked_min = tracked_minutes(conn, id)?;
+        let tracked_min = tracked_minutes(conn, id, rec.as_deref() == Some("daily"))?;
         tasks.push(Task {
             id, category_id: cid, category_name: cname, category_color: ccolor,
             title, body_md: body, estimate_min: est, status, recurrence: rec,
@@ -457,8 +479,30 @@ pub fn update_task(
 }
 
 pub fn delete_task(conn: &Connection, id: i64) -> Result<()> {
-    conn.execute("DELETE FROM segments WHERE task_id = ?1", params![id])?;
-    conn.execute("DELETE FROM tasks WHERE id = ?1", params![id])?;
+    // Stop this task's tracking if it was running.
+    conn.execute(
+        "UPDATE segments SET end_at = ?1, reason = COALESCE(reason, 'deleted')
+          WHERE task_id = ?2 AND end_at IS NULL",
+        params![now(), id],
+    )?;
+    // The time ledger is append-only: if this task has ANY tracked history, keep
+    // the row + its segments and just soft-delete it (hidden from every list but
+    // still counted in the dashboard/history). Only a task that was never
+    // tracked is hard-deleted, since there's nothing to preserve.
+    let has_history: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM segments WHERE task_id = ?1)",
+        params![id],
+        |r| r.get(0),
+    )?;
+    if has_history {
+        conn.execute(
+            "UPDATE tasks SET status = 'deleted', plan_date = NULL, recurrence = NULL, updated_at = ?1
+              WHERE id = ?2",
+            params![now(), id],
+        )?;
+    } else {
+        conn.execute("DELETE FROM tasks WHERE id = ?1", params![id])?;
+    }
     Ok(())
 }
 
@@ -515,11 +559,20 @@ pub fn pause_at_estimate(conn: &Connection, task_id: i64, estimate_min: i64) -> 
         None => return Ok(false),
     };
     // Seconds already banked in this task's CLOSED segments; the open one may
-    // run only long enough to bring the total up to the estimate.
+    // run only long enough to bring the total up to the estimate. For a
+    // recurring daily task only TODAY's closed segments count, since its
+    // estimate is a per-day target that resets at midnight.
+    let day_pred = if is_daily(conn, task_id) {
+        " AND date(start_at,'localtime')=date('now','localtime')"
+    } else {
+        ""
+    };
     let closed_secs: i64 = conn
         .query_row(
-            "SELECT COALESCE(SUM(CAST((julianday(end_at)-julianday(start_at))*86400 AS INTEGER)),0)
-             FROM segments WHERE task_id=?1 AND end_at IS NOT NULL",
+            &format!(
+                "SELECT COALESCE(SUM(CAST((julianday(end_at)-julianday(start_at))*86400 AS INTEGER)),0)
+                 FROM segments WHERE task_id=?1 AND end_at IS NOT NULL{day_pred}"
+            ),
             params![task_id],
             |r| r.get(0),
         )
@@ -657,6 +710,19 @@ pub fn set_stop_time(conn: &Connection, stop_time: &str) -> Result<()> {
 fn get_setting(conn: &Connection, key: &str) -> Option<String> {
     conn.query_row("SELECT value FROM app_settings WHERE key=?1", params![key], |r| r.get(0))
         .ok()
+}
+
+/// Public accessors over app_settings so sibling modules (e.g. email) can read
+/// and persist their own configuration without duplicating the SQL.
+pub fn setting(conn: &Connection, key: &str) -> Option<String> {
+    get_setting(conn, key)
+}
+pub fn put_setting(conn: &Connection, key: &str, value: &str) -> Result<()> {
+    set_setting(conn, key, value)
+}
+/// Current local hour (0-23), for time-of-day scheduling.
+pub fn hour_now(conn: &Connection) -> i64 {
+    local_hour(conn)
 }
 
 /// The day the week starts on for the dashboard's week view: 0=Sunday..6=Saturday
@@ -941,7 +1007,7 @@ pub fn snapshot(conn: &Connection) -> Result<Snapshot> {
         None
     };
     let active_tracked_min: i64 = match active_task_id {
-        Some(id) => tracked_minutes(conn, id).unwrap_or(0),
+        Some(id) => tracked_minutes(conn, id, is_daily(conn, id)).unwrap_or(0),
         None => 0,
     };
     let tracked_today_min: i64 = conn.query_row(
@@ -1172,6 +1238,58 @@ pub fn dashboard(conn: &Connection, period: &str, offset: i64) -> Result<Dashboa
         }
     }
 
+    // Pauses per task, grouped by reason. A reason is stamped on the segment
+    // that ended when the clock stopped (the user's typed note, or a system
+    // reason). Segments closed by simply switching tasks carry no reason, so
+    // filtering to non-empty reasons captures exactly the pause-like stops.
+    let mut task_pauses: std::collections::HashMap<i64, Vec<PauseStat>> =
+        std::collections::HashMap::new();
+    {
+        // Reasons the app sets itself (everything else is a user-typed note).
+        // Includes a few legacy/one-off tokens from earlier builds and manual
+        // data repairs so they never masquerade as the user's own notes.
+        let auto_reasons: std::collections::HashSet<&str> = [
+            "auto-idle",
+            "auto-suspend",
+            "day-rollover",
+            "reached-estimate",
+            "rescheduled",
+            "deleted",
+            "break-start",
+            "break-end",
+            "capped-suspend",
+            "capped-runaway",
+        ]
+        .into_iter()
+        .collect();
+        let mut stmt = conn.prepare(&format!(
+            "SELECT s.task_id, s.reason, COUNT(*) AS cnt
+             FROM segments s
+             WHERE {seg_s} AND s.reason IS NOT NULL AND trim(s.reason) <> ''
+             GROUP BY s.task_id, s.reason
+             ORDER BY cnt DESC, s.reason",
+        ))?;
+        let rows = stmt.query_map([], |r| {
+            Ok((
+                r.get::<_, Option<i64>>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, i64>(2)?,
+            ))
+        })?;
+        for row in rows {
+            let (tid, reason, cnt) = row?;
+            if let Some(id) = tid {
+                let auto = auto_reasons.contains(reason.as_str());
+                task_pauses.entry(id).or_default().push(PauseStat { reason, count: cnt, auto });
+            }
+        }
+        // User-typed reasons first (the interesting ones), then the automatic
+        // ones; each group already ordered by frequency from SQL.
+        for v in task_pauses.values_mut() {
+            v.sort_by_key(|p| p.auto);
+        }
+    }
+
     // by app (automatic ground truth; our own window is excluded)
     let mut by_app = Vec::new();
     {
@@ -1223,6 +1341,7 @@ pub fn dashboard(conn: &Connection, period: &str, offset: i64) -> Result<Dashboa
                 let mut apps = task_apps.remove(&id).unwrap_or_default();
                 apps.sort_by(|a, b| b.minutes.cmp(&a.minutes));
                 apps.truncate(6);
+                let pauses = task_pauses.remove(&id).unwrap_or_default();
                 PlannedActual {
                     title,
                     color,
@@ -1233,6 +1352,7 @@ pub fn dashboard(conn: &Connection, period: &str, offset: i64) -> Result<Dashboa
                     done,
                     untracked: false,
                     apps,
+                    pauses,
                 }
             })
             .collect()
@@ -1250,6 +1370,7 @@ pub fn dashboard(conn: &Connection, period: &str, offset: i64) -> Result<Dashboa
             done: false,
             untracked: true,
             apps: untracked_apps,
+            pauses: Vec::new(),
         });
         planned_actual.sort_by(|a, b| b.tracked_min.cmp(&a.tracked_min));
     }

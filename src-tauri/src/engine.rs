@@ -19,11 +19,15 @@ use rusqlite::Connection;
 use tauri::{AppHandle, Emitter, Manager};
 
 use crate::db;
+use crate::email;
 use crate::window;
 
 const TICK: Duration = Duration::from_secs(20);
 // If you are active with no task selected, re-offer to start one this often.
 const RENUDGE_AFTER: Duration = Duration::from_secs(5 * 60);
+// On a failed daily-email send, wait this long before retrying (so a bad key or
+// a network blip retries a few times across the morning, not every 20s).
+const EMAIL_RETRY: Duration = Duration::from_secs(10 * 60);
 
 pub fn spawn(app: AppHandle, db: Arc<Mutex<Connection>>, idle_flag: PathBuf, idle_secs: i64) {
     thread::spawn(move || {
@@ -33,6 +37,7 @@ pub fn spawn(app: AppHandle, db: Arc<Mutex<Connection>>, idle_flag: PathBuf, idl
         let mut last_nudge: Option<Instant> = None;
         let mut was_idle = false;
         let mut last_break_prompt: Option<Instant> = None;
+        let mut last_email_attempt: Option<Instant> = None;
         let mut current_day = String::new();
 
         loop {
@@ -44,6 +49,31 @@ pub fn spawn(app: AppHandle, db: Arc<Mutex<Connection>>, idle_flag: PathBuf, idl
                 }
             };
             let _ = app.emit("snapshot", &snap);
+
+            // Daily summary email. Cheap gate every tick; when due, throttle real
+            // attempts so a failing send retries across the morning, not every
+            // tick. Build under the lock, send unlocked, then mark sent.
+            let want_email = db.lock().ok().map(|c| email::should_send(&c)).unwrap_or(false);
+            if want_email {
+                let due = last_email_attempt.map(|t| t.elapsed() >= EMAIL_RETRY).unwrap_or(true);
+                if due {
+                    last_email_attempt = Some(Instant::now());
+                    let payload = db.lock().ok().and_then(|c| email::build_due_payload(&c));
+                    if let Some(p) = payload {
+                        match email::send(&p) {
+                            Ok(()) => {
+                                if let Ok(c) = db.lock() {
+                                    email::mark_sent(&c);
+                                }
+                                println!("[email] daily summary sent to {}", p.to);
+                            }
+                            Err(e) => eprintln!("[email] send failed: {e}"),
+                        }
+                    }
+                }
+            } else {
+                last_email_attempt = None;
+            }
 
             // Day rollover: when the local day changes (or at startup, catching a
             // launch after midnight), stop any tracking that crossed midnight and

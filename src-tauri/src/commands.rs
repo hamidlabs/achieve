@@ -262,3 +262,20 @@ pub fn dismiss_popup(app: AppHandle) -> CmdResult<()> {
 pub fn quit_app(app: AppHandle) {
     app.exit(0);
 }
+
+/// Send the daily summary email immediately for the given day offset (0 = today,
+/// 1 = yesterday). Builds under the DB lock, then does the HTTP call unlocked.
+#[tauri::command]
+pub fn send_summary_now(state: State<'_, AppState>, offset: Option<i64>) -> CmdResult<String> {
+    let off = offset.unwrap_or(1);
+    let payload = {
+        let c = state.db.lock().map_err(err)?;
+        crate::email::build_payload(&c, off)?
+    };
+    crate::email::send(&payload)?;
+    {
+        let c = state.db.lock().map_err(err)?;
+        crate::email::mark_sent(&c);
+    }
+    Ok(format!("Sent \"{}\" to {}", payload.subject, payload.to))
+}

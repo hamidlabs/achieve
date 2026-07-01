@@ -102,6 +102,18 @@ pub struct AppStat {
     pub minutes: i64,
 }
 
+/// One kind of pause recorded against a task, grouped by its reason. A reason is
+/// stamped on the segment that ENDED when the task's clock stopped: either the
+/// note the user typed when pausing, or a system reason (idle, suspend, reaching
+/// the estimate, day rollover). `auto` distinguishes the two so the UI can show
+/// the user's own reasons prominently and the automatic ones quietly.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PauseStat {
+    pub reason: String,
+    pub count: i64,
+    pub auto: bool,
+}
+
 /// A task (or the synthetic "Untracked" bucket) with its actual tracked time and
 /// the apps it was spent in, so the dashboard can show where each task's time went.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -116,6 +128,9 @@ pub struct PlannedActual {
     /// true for the synthetic "Untracked" row (active time with no task = distraction).
     pub untracked: bool,
     pub apps: Vec<AppStat>,
+    /// Pauses recorded for this task in the window, grouped by reason (user notes
+    /// first, then automatic ones), most frequent first.
+    pub pauses: Vec<PauseStat>,
 }
 
 /// One column of the hero activity chart (an hour of the day, or a day of the

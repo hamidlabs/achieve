@@ -90,6 +90,12 @@ export interface AppStat {
   minutes: number;
 }
 
+export interface PauseStat {
+  reason: string;
+  count: number;
+  auto: boolean;
+}
+
 export interface PlannedActual {
   title: string;
   color: string;
@@ -100,6 +106,7 @@ export interface PlannedActual {
   done: boolean;
   untracked: boolean;
   apps: AppStat[];
+  pauses: PauseStat[];
 }
 
 export interface Bar {

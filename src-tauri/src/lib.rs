@@ -6,6 +6,7 @@ mod autostart;
 mod commands;
 mod db;
 mod desktop;
+mod email;
 mod engine;
 mod idle;
 mod model;
@@ -41,6 +42,36 @@ pub fn run() {
             let conn = db::open(&db_path).map_err(|e| format!("failed to open database: {e}"))?;
             let db = Arc::new(Mutex::new(conn));
             app.manage(AppState { db: db.clone() });
+
+            // Persist any Brevo credentials passed via env into the DB, so later
+            // autostart launches (which carry no env) still send the digest.
+            if let Ok(c) = db.lock() {
+                email::seed_from_env(&c);
+            }
+
+            // Dev/verification hook: ACHIEVE_SEND_TEST=<offset> sends one summary
+            // immediately (default offset 1 = yesterday), off the main thread.
+            if let Ok(v) = std::env::var("ACHIEVE_SEND_TEST") {
+                let off: i64 = v.parse().unwrap_or(1);
+                let dbc = db.clone();
+                std::thread::spawn(move || {
+                    let payload = dbc.lock().ok().and_then(|c| email::build_payload(&c, off).ok());
+                    match payload {
+                        Some(p) => match email::send(&p) {
+                            Ok(()) => {
+                                // Mark today's send done so the scheduler doesn't
+                                // also fire a duplicate later in the day.
+                                if let Ok(c) = dbc.lock() {
+                                    email::mark_sent(&c);
+                                }
+                                println!("[email] TEST summary sent to {}", p.to);
+                            }
+                            Err(e) => eprintln!("[email] TEST send failed: {e}"),
+                        },
+                        None => eprintln!("[email] TEST: could not build payload (not configured?)"),
+                    }
+                });
+            }
 
             // Idle detection: how long with no input before a task auto-pauses.
             let idle_secs: i64 = std::env::var("ACHIEVE_IDLE_SECS")
@@ -95,6 +126,7 @@ pub fn run() {
             commands::fit_window,
             commands::dismiss_popup,
             commands::quit_app,
+            commands::send_summary_now,
         ])
         .run(tauri::generate_context!())
         .expect("error while running achieve");

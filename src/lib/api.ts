@@ -102,4 +102,6 @@ export const api = {
   fitWindow: (height: number) => invoke<void>("fit_window", { height }),
   dismiss: () => invoke<void>("dismiss_popup"),
   quit: () => invoke<void>("quit_app"),
+  // Send the daily summary email now (offset: 0=today, 1=yesterday).
+  sendSummaryNow: (offset = 1) => invoke<string>("send_summary_now", { offset }),
 };

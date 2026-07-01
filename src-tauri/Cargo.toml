@@ -25,6 +25,9 @@ anyhow = "1"
 # via tauri, pinned here so we can use it directly)
 zbus = "5"
 libc = "0.2"
+# Blocking HTTP client for the Brevo transactional email API. Blocking fits the
+# engine's sync background thread; rustls avoids a system OpenSSL dependency.
+ureq = { version = "2", features = ["json", "tls"], default-features = false }
 
 [profile.dev]
 incremental = true
