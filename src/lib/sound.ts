@@ -22,35 +22,49 @@ function context(): AudioContext | null {
   }
 }
 
-// Preloaded <audio> elements for the file-based cues, keyed by source URL.
-const clips = new Map<string, HTMLAudioElement>();
-function clip(url: string): HTMLAudioElement | null {
-  if (typeof window === "undefined") return null;
-  let el = clips.get(url);
-  if (!el) {
-    el = new Audio(url);
-    el.preload = "auto";
-    clips.set(url, el);
+// File cues are decoded into the AudioContext and played as buffers, NOT via
+// <audio> elements. WebKitGTK (the Tauri webview on Linux) blocks
+// HTMLAudioElement.play() outside a direct click handler, so timer/effect-driven
+// cues get silently dropped. Web Audio playback is exempt once the context has
+// been resumed by a gesture, which is exactly what initSound() arranges.
+const buffers = new Map<string, AudioBuffer>();
+async function decode(url: string): Promise<void> {
+  const c = context();
+  if (!c || buffers.has(url)) return;
+  try {
+    const res = await fetch(url);
+    const data = await res.arrayBuffer();
+    buffers.set(url, await c.decodeAudioData(data));
+  } catch {
+    /* asset missing / decode failure: leave uncached, playFile no-ops */
   }
-  return el;
 }
 
-/** Play a bundled audio file from its start, honoring mute. */
+/** Play a decoded cue from its start, honoring mute. Decodes on demand if the
+ *  buffer wasn't primed yet (first play may be a beat late, then it's instant). */
 function playFile(url: string, volume = 1): void {
   if (muted) return;
-  const el = clip(url);
-  if (!el) return;
-  try {
-    el.currentTime = 0;
-    el.volume = volume;
-    void el.play();
-  } catch {
-    /* autoplay/gesture restrictions: ignore */
+  const c = context();
+  if (!c) return;
+  const buf = buffers.get(url);
+  if (!buf) {
+    void decode(url).then(() => {
+      if (!muted && buffers.has(url)) playFile(url, volume);
+    });
+    return;
   }
+  const src = c.createBufferSource();
+  src.buffer = buf;
+  const g = c.createGain();
+  g.gain.value = volume;
+  src.connect(g);
+  g.connect(c.destination);
+  src.start();
 }
 
-/** Wire up mute state and unlock audio on the first user interaction (some
- *  webviews start audio suspended/blocked until a gesture). */
+/** Wire up mute state and unlock audio on the first user interaction (WebKitGTK
+ *  starts the AudioContext suspended until a gesture). Also decodes the file
+ *  cues up front so the first real cue plays without delay. */
 export function initSound(): void {
   if (typeof window === "undefined") return;
   try {
@@ -60,8 +74,7 @@ export function initSound(): void {
   }
   const unlock = () => {
     context();
-    // Prime the file clips so the first real cue plays without delay.
-    for (const url of [preBreakUrl, stopBreakUrl, warningUrl]) clip(url)?.load();
+    for (const url of [preBreakUrl, stopBreakUrl, warningUrl]) void decode(url);
   };
   window.addEventListener("pointerdown", unlock, { once: true, passive: true });
   window.addEventListener("keydown", unlock, { once: true });
