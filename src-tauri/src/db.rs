@@ -329,6 +329,16 @@ pub fn create_category(conn: &Connection, name: &str, color: &str) -> Result<i64
     Ok(conn.last_insert_rowid())
 }
 
+/// Rename and/or recolor a category. Tasks reference it by id, so they follow
+/// the change automatically.
+pub fn update_category(conn: &Connection, id: i64, name: &str, color: &str) -> Result<()> {
+    conn.execute(
+        "UPDATE categories SET name = ?2, color = ?3 WHERE id = ?1",
+        params![id, name, color],
+    )?;
+    Ok(())
+}
+
 /// Delete a category. Tasks in it are NOT deleted; they become uncategorized.
 pub fn delete_category(conn: &Connection, id: i64) -> Result<()> {
     conn.execute(

@@ -50,6 +50,16 @@ pub fn create_category(
 }
 
 #[tauri::command]
+pub fn update_category(
+    state: State<'_, AppState>,
+    id: i64,
+    name: String,
+    color: String,
+) -> CmdResult<()> {
+    with_db!(state, c => db::update_category(&c, id, &name, &color))
+}
+
+#[tauri::command]
 pub fn delete_category(state: State<'_, AppState>, id: i64) -> CmdResult<()> {
     with_db!(state, c => db::delete_category(&c, id))
 }

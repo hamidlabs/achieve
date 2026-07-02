@@ -4,7 +4,7 @@
   import ProgressRing from "../ui/ProgressRing.svelte";
   import { api } from "../api";
   import { store, refreshSnapshot } from "../store.svelte";
-  import { breakStart, breakOver } from "../sound";
+  import { breakStart } from "../sound";
   import type { BreakSettings } from "../types";
 
   const TEAL = "#2aa39a";
@@ -16,17 +16,10 @@
   let settings = $state<BreakSettings>({ enabled: true, work_min: 50, duration_min: 5, snooze_min: 5 });
   onMount(async () => {
     try { settings = await api.breakSettings(); } catch { /* dev */ }
-    // Chime when the break prompt appears. The "break over" cue is handled by
-    // the effect below (covers both a live countdown hitting 0 and the engine
-    // re-surfacing an already-finished break).
+    // Chime when the break prompt appears. The "break over" cue is played by
+    // the engine at the exact end of the timer, so it fires reliably even when
+    // this window is hidden or throttled.
     if (!snap?.on_break) breakStart();
-  });
-
-  // Chime once when the break is complete.
-  let chimedOver = $state(false);
-  $effect(() => {
-    if (done && !chimedOver) { chimedOver = true; breakOver(); }
-    if (!done) chimedOver = false;
   });
 
   // Smooth local countdown, re-synced to the backend's value each snapshot tick.

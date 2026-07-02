@@ -104,6 +104,7 @@ pub fn run() {
             commands::list_upcoming,
             commands::list_categories,
             commands::create_category,
+            commands::update_category,
             commands::delete_category,
             commands::create_task,
             commands::update_task,

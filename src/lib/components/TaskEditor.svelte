@@ -3,8 +3,7 @@
   import Icon from "../icons/Icon.svelte";
   import MarkdownEditor from "../ui/MarkdownEditor.svelte";
   import { api } from "../api";
-  import { refreshCategories } from "../store.svelte";
-  import { catColor } from "../format";
+  import CategoryPicker from "./CategoryPicker.svelte";
   import type { Category, Task } from "../types";
 
   interface Props {
@@ -51,48 +50,9 @@
     }
   }
 
-  // Inline category create / manage.
-  const palette = [
-    "#6b6bff", "#37b6a6", "#e0a23c", "#c06bd8",
-    "#e36b6b", "#4f9be0", "#5bc46b", "#df7bb0",
-  ];
-  let addingCat = $state(false);
-  let managingCats = $state(false);
-  let newCatName = $state("");
-  let newCatColor = $state(palette[0]);
-
-  // Pick an existing category; in the wizard this also advances to the next step.
-  function pickCategory(id: number | null) {
-    categoryId = id;
+  // Advance the create wizard once a category is chosen on the category step.
+  function onCatPicked() {
     if (!isEdit && step === 1) next();
-  }
-
-  async function deleteCategory(c: Category) {
-    if (!confirm(`Delete "${c.name}"? Tasks in it are kept and become uncategorized.`)) return;
-    try {
-      await api.deleteCategory(c.id);
-      await refreshCategories();
-      if (categoryId === c.id) categoryId = null;
-    } catch (e) {
-      console.error("[achieve] delete category failed:", e);
-      alert("Could not delete the category: " + e);
-    }
-  }
-
-  async function createCategory() {
-    const name = newCatName.trim();
-    if (!name) return;
-    try {
-      const id = await api.createCategory(name, newCatColor);
-      await refreshCategories();
-      categoryId = id; // select it, but stay so the choice is visible
-    } catch (e) {
-      console.error("[achieve] create category failed:", e);
-      alert("Could not create the category: " + e);
-    }
-    addingCat = false;
-    newCatName = "";
-    newCatColor = palette[0];
   }
 
   async function save() {
@@ -201,7 +161,7 @@
 
       <div class="foot">
         {#if step === 1}
-          <button class="btn btn-ghost" onclick={() => pickCategory(null)}>Skip</button>
+          <button class="btn btn-ghost" onclick={() => { categoryId = null; next(); }}>Skip</button>
         {/if}
         <div class="flex-1"></div>
         <button class="btn btn-primary" onclick={next} disabled={!canNext}>
@@ -219,55 +179,7 @@
 <!-- ===================== shared sections ===================== -->
 
 {#snippet categorySection()}
-  <div>
-    {#if categories.length > 0}
-      <div class="flex items-center justify-end mb-1.5">
-        <button class="link-btn" onclick={() => { managingCats = !managingCats; addingCat = false; }}>
-          <Icon name={managingCats ? "check" : "settings"} size={12} />
-          {managingCats ? "Done" : "Manage"}
-        </button>
-      </div>
-    {/if}
-    <div class="cat-scroll flex flex-wrap gap-1.5 items-start content-start">
-      {#each categories as c (c.id)}
-        <div class="chip transition" style={categoryId === c.id && !managingCats ? `background: ${catColor(c.color)}; color: white;` : ""}>
-          <button class="flex items-center gap-1.5" disabled={managingCats} onclick={() => pickCategory(c.id)}>
-            <span class="w-2 h-2 rounded-full" style="background: {categoryId === c.id && !managingCats ? 'white' : catColor(c.color)};"></span>
-            {c.name}
-          </button>
-          {#if managingCats}
-            <button class="ml-1 -mr-1 grid place-items-center w-4 h-4 rounded-full hover:bg-black/5 transition"
-              style="color: var(--color-danger);" title="Delete category" onclick={() => deleteCategory(c)}>
-              <Icon name="x" size={11} />
-            </button>
-          {/if}
-        </div>
-      {/each}
-      {#if !managingCats}
-        <button class="chip transition" style="border: 1px dashed var(--line-strong);" onclick={() => (addingCat = !addingCat)}>
-          <Icon name={addingCat ? "x" : "plus"} size={12} /> New
-        </button>
-      {/if}
-    </div>
-
-    {#if addingCat}
-      <div class="mt-2 panel rounded-[var(--radius-md)] p-2.5 flex flex-col gap-2 fade">
-        <div class="flex items-center gap-2">
-          <span class="w-3.5 h-3.5 rounded-full shrink-0" style="background: {newCatColor};"></span>
-          <input class="field no-drag" style="padding:6px 9px; user-select:text;" placeholder="New category name…"
-            bind:value={newCatName} onkeydown={(e) => e.key === "Enter" && createCategory()} />
-          <button class="btn btn-primary" style="padding:6px 12px;" disabled={!newCatName.trim()} onclick={createCategory}>Add</button>
-        </div>
-        <div class="flex flex-wrap gap-1.5">
-          {#each palette as col (col)}
-            <button class="w-5 h-5 rounded-full transition" aria-label="color"
-              style="background: {col}; outline: {newCatColor === col ? '2px solid white' : '2px solid transparent'}; outline-offset: 1px;"
-              onclick={() => (newCatColor = col)}></button>
-          {/each}
-        </div>
-      </div>
-    {/if}
-  </div>
+  <CategoryPicker bind:categoryId {categories} onPicked={onCatPicked} />
 {/snippet}
 
 {#snippet timeSection()}
@@ -389,7 +301,10 @@
     overflow-y: auto;
   }
   .body.wizard {
-    overflow: hidden;
+    /* Clip the horizontal slide transition, but let content (e.g. the open
+       category dropdown) scroll vertically instead of being cut off. */
+    overflow-x: hidden;
+    overflow-y: auto;
     position: relative;
   }
   .step {
@@ -419,11 +334,6 @@
     padding: 10px 12px;
     border-top: 0.5px solid var(--line);
     flex-shrink: 0;
-  }
-  /* Bounded category list so it scrolls instead of growing the dialog. */
-  .cat-scroll {
-    max-height: 156px;
-    overflow-y: auto;
   }
   .link-btn {
     display: inline-flex;

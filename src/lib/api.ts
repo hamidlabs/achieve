@@ -18,6 +18,8 @@ export const api = {
   categories: () => invoke<Category[]>("list_categories"),
   createCategory: (name: string, color: string) =>
     invoke<number>("create_category", { name, color }),
+  updateCategory: (id: number, name: string, color: string) =>
+    invoke<void>("update_category", { id, name, color }),
   deleteCategory: (id: number) => invoke<void>("delete_category", { id }),
 
   // NOTE: Tauri maps camelCase JS args -> snake_case Rust params, so keys here

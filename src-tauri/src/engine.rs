@@ -37,6 +37,10 @@ pub fn spawn(app: AppHandle, db: Arc<Mutex<Connection>>, idle_flag: PathBuf, idl
         let mut last_nudge: Option<Instant> = None;
         let mut was_idle = false;
         let mut last_break_prompt: Option<Instant> = None;
+        // Play the "break over" cue once per break, from the engine so it fires
+        // even if the break window is hidden or the webview throttled its
+        // countdown. Reset when the break ends.
+        let mut break_chimed_over = false;
         let mut last_email_attempt: Option<Instant> = None;
         // Startup catch-up: send today's summary on this boot even if we launched
         // after the configured hour. Cleared after the first send (or once we see
@@ -193,6 +197,19 @@ pub fn spawn(app: AppHandle, db: Arc<Mutex<Connection>>, idle_flag: PathBuf, idl
                     (false, false)
                 }
             };
+            // The "break over" cue plays exactly once when the timer elapses,
+            // from here (a native thread) so it lands even if the break window
+            // is hidden or on another workspace. The pre-break cue is played by
+            // BreakView on mount when the prompt appears.
+            if snap.on_break {
+                if snap.break_remaining_sec <= 0 && !break_chimed_over {
+                    break_chimed_over = true;
+                    crate::sound::play("stop_break");
+                }
+            } else {
+                break_chimed_over = false;
+            }
+
             if (due_for_break || break_over) && !visible {
                 let due = last_break_prompt
                     .map(|t| t.elapsed() >= RENUDGE_AFTER)
@@ -228,7 +245,9 @@ pub fn spawn(app: AppHandle, db: Arc<Mutex<Connection>>, idle_flag: PathBuf, idl
                 }
             }
 
-            thread::sleep(TICK);
+            // Tick faster during a break so the "break over" cue lands within a
+            // second of the timer ending instead of up to a full TICK late.
+            thread::sleep(if snap.on_break { Duration::from_secs(1) } else { TICK });
         }
     });
 }
