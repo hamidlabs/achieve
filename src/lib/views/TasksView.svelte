@@ -11,6 +11,7 @@
   import { store, go, refreshSnapshot, refreshTasks } from "../store.svelte";
   import { onMount } from "svelte";
   import { taskDone, noTaskWarning } from "../sound";
+  import { assessTasks } from "../risk";
   import { fmtMin, catColor } from "../format";
   import type { Task, Bar, TimelineSpan } from "../types";
 
@@ -127,6 +128,18 @@
   const doneCount = $derived(completed.length);
   const totalCount = $derived(store.tasks.length);
   const bufferMin = $derived(Math.max(0, left - committed));
+
+  // Risk colouring for the planned list, so the tasks that need focus stand
+  // out (same logic as the break overlay): urgent = red, behind = amber.
+  const riskLevels = $derived(
+    new Map(assessTasks(store.tasks, snap).map((r) => [r.task.id, r.level])),
+  );
+  function riskAccent(id: number): string {
+    const l = riskLevels.get(id);
+    if (l === "urgent") return "box-shadow: inset 3px 0 0 var(--color-danger);";
+    if (l === "behind") return "box-shadow: inset 3px 0 0 var(--color-warn);";
+    return "";
+  }
 
   // Warn on mount when this popup surfaces and nothing is actively being
   // tracked, i.e. no task is running (pick one) or a task is `awaiting` a
@@ -379,7 +392,7 @@
           {#each planned as t (t.id)}
             {@const hasBody = !!t.body_md?.trim()}
             <div class="list-item group">
-              <div class="list-row px-2.5 py-2.5 flex items-center gap-2.5">
+              <div class="list-row px-2.5 py-2.5 flex items-center gap-2.5" style={riskAccent(t.id)}>
                 <button class="check no-drag shrink-0" title="Mark done" onclick={() => complete(t.id)} aria-label="Mark done">
                   <Icon name="check" size={12.5} />
                 </button>
@@ -388,6 +401,8 @@
                   <div class="text-[13px] font-medium text-ink truncate flex items-center gap-1.5">
                     {t.title}
                     {#if t.recurrence}<Icon name="repeat" size={11} class="text-ink-faint" />{/if}
+                    {#if riskLevels.get(t.id) === "urgent"}<span class="risk-tag urgent">Urgent</span>
+                    {:else if riskLevels.get(t.id) === "behind"}<span class="risk-tag behind">Behind</span>{/if}
                     {#if t.status === "paused"}<span class="pill-muted">paused</span>{/if}
                   </div>
                   {#if t.category_name || t.estimate_min || t.tracked_min > 0}
@@ -854,6 +869,23 @@
     background: color-mix(in oklab, var(--color-ink) 7%, transparent);
     padding: 2px 6px;
     border-radius: 999px;
+  }
+  .risk-tag {
+    flex-shrink: 0;
+    font-size: 9px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    padding: 2px 6px;
+    border-radius: 999px;
+  }
+  .risk-tag.urgent {
+    color: var(--color-danger);
+    background: color-mix(in oklab, var(--color-danger) 14%, transparent);
+  }
+  .risk-tag.behind {
+    color: var(--color-warn);
+    background: color-mix(in oklab, var(--color-warn) 16%, transparent);
   }
   /* Secondary tools (reschedule, edit): present but dim, brightening on hover
      so the row stays calm without hiding the controls. */
