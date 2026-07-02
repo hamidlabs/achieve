@@ -391,53 +391,56 @@
         {#if tab === "today"}
           {#each planned as t (t.id)}
             {@const hasBody = !!t.body_md?.trim()}
-            <div class="list-item group">
-              <div class="list-row px-2.5 py-2.5 flex items-center gap-2.5" style={riskAccent(t.id)}>
+            {@const rl = riskLevels.get(t.id)}
+            <div class="list-item group" style={riskAccent(t.id)}>
+              <div class="ptop">
                 <button class="check no-drag shrink-0" title="Mark done" onclick={() => complete(t.id)} aria-label="Mark done">
                   <Icon name="check" size={12.5} />
                 </button>
 
-                <button class="flex-1 min-w-0 text-left" onclick={() => openEdit(t)}>
-                  <div class="text-[13px] font-medium text-ink truncate flex items-center gap-1.5">
-                    {t.title}
-                    {#if t.recurrence}<Icon name="repeat" size={11} class="text-ink-faint" />{/if}
-                    {#if riskLevels.get(t.id) === "urgent"}<span class="risk-tag urgent">Urgent</span>
-                    {:else if riskLevels.get(t.id) === "behind"}<span class="risk-tag behind">Behind</span>{/if}
-                    {#if t.status === "paused"}<span class="pill-muted">paused</span>{/if}
-                  </div>
-                  {#if t.category_name || t.estimate_min || t.tracked_min > 0}
-                    <div class="flex items-center gap-1.5 mt-1.5">
-                      {@render catBadge(t)}
-                      {@render timeBadge(t)}
-                    </div>
-                  {/if}
+                <button class="ptitle no-drag" onclick={() => openEdit(t)}>
+                  <span class="ptitle-text">{t.title}</span>
+                  {#if t.recurrence}<Icon name="repeat" size={11} class="text-ink-faint shrink-0" />{/if}
+                  {#if t.status === "paused"}<span class="pill-muted shrink-0">paused</span>{/if}
                 </button>
 
-                {#if hasBody}
-                  <button class="icon-btn no-drag shrink-0" style="width:24px;height:24px;"
-                    title={expanded[t.id] ? "Hide details" : "Show details"} onclick={() => toggle(t.id)}>
-                    <Icon name="chevron-down" size={15} style="transition:transform .2s ease; transform: rotate({expanded[t.id] ? 180 : 0}deg);" />
-                  </button>
-                {/if}
-                <div class="row-tools relative shrink-0 flex items-center">
-                  <div class="relative">
-                    <button class="icon-btn no-drag" title="Reschedule" onclick={() => (reschedFor = reschedFor?.id === t.id ? null : t)}>
-                      <Icon name="calendar-clock" size={16} />
+                <div class="pactions shrink-0">
+                  {#if hasBody}
+                    <button class="icon-btn no-drag" style="width:24px;height:24px;"
+                      title={expanded[t.id] ? "Hide details" : "Show details"} onclick={() => toggle(t.id)}>
+                      <Icon name="chevron-down" size={15} style="transition:transform .2s ease; transform: rotate({expanded[t.id] ? 180 : 0}deg);" />
                     </button>
-                    {#if reschedFor?.id === t.id}
-                      <DatePopover current={t.plan_date} onPick={pickDate} onClose={() => (reschedFor = null)} />
-                    {/if}
+                  {/if}
+                  <div class="row-tools relative flex items-center">
+                    <div class="relative">
+                      <button class="icon-btn no-drag" title="Reschedule" onclick={() => (reschedFor = reschedFor?.id === t.id ? null : t)}>
+                        <Icon name="calendar-clock" size={16} />
+                      </button>
+                      {#if reschedFor?.id === t.id}
+                        <DatePopover current={t.plan_date} onPick={pickDate} onClose={() => (reschedFor = null)} />
+                      {/if}
+                    </div>
+                    <button class="icon-btn no-drag" title="Edit" onclick={() => openEdit(t)}>
+                      <Icon name="pencil" size={15} />
+                    </button>
                   </div>
-                  <button class="icon-btn no-drag" title="Edit" onclick={() => openEdit(t)}>
-                    <Icon name="pencil" size={15} />
+                  <button class="btn btn-primary no-drag" style="padding:6px 11px;" onclick={() => start(t)}>
+                    <Icon name="play" size={13} fill /> Start
                   </button>
                 </div>
-                <button class="btn btn-primary no-drag shrink-0" style="padding:6px 11px;" onclick={() => start(t)}>
-                  <Icon name="play" size={13} fill /> Start
-                </button>
               </div>
+
+              {#if rl === "urgent" || rl === "behind" || t.category_name || t.estimate_min || t.tracked_min > 0}
+                <div class="pmeta">
+                  {#if rl === "urgent"}<span class="risk-tag urgent">Urgent</span>
+                  {:else if rl === "behind"}<span class="risk-tag behind">Behind</span>{/if}
+                  {@render catBadge(t)}
+                  {@render timeBadge(t)}
+                </div>
+              {/if}
+
               {#if hasBody && expanded[t.id]}
-                <div class="px-3 pb-3 pl-[42px] fade">
+                <div class="px-2.5 pb-3 pl-[40px] fade">
                   <div class="pt-1.5" style="border-top: 0.5px solid var(--line);">
                     <Markdown source={t.body_md} />
                   </div>
@@ -869,6 +872,43 @@
     background: color-mix(in oklab, var(--color-ink) 7%, transparent);
     padding: 2px 6px;
     border-radius: 999px;
+  }
+  /* Planned row: two tiers so the meta badges get a full-width line and never
+     collide with the action buttons. */
+  .ptop {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px;
+  }
+  .ptitle {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    text-align: left;
+  }
+  .ptitle-text {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--color-ink);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .pactions {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+  }
+  .pmeta {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    padding: 0 10px 10px 40px;
+    margin-top: -4px;
   }
   .risk-tag {
     flex-shrink: 0;
