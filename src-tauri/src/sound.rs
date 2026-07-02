@@ -1,65 +1,49 @@
-//! Backend audio cues. WebKitGTK's in-page audio (both `<audio>` and the Web
-//! Audio API) is unreliable under Tauri on Linux, so instead of playing cues in
-//! the webview we play them from Rust through the system audio, which is
-//! known-good. The cue files are embedded in the binary and materialised to a
-//! temp cache the first time they're used.
+//! Backend audio cues, played with rodio (pure-Rust playback over cpal/ALSA).
+//!
+//! The Tauri webview on Linux (WebKitGTK) can't reliably play in-page audio, so
+//! the frontend asks us (via the `play_sound` command) to play a cue and we
+//! decode + play the embedded file here. No temp files, no external players.
 
-use std::io::Write;
-use std::path::PathBuf;
-use std::process::Command;
+use std::io::Cursor;
 
 const PRE_BREAK: &[u8] = include_bytes!("../../src/assets/sounds/on_pre_break.wav");
 const STOP_BREAK: &[u8] = include_bytes!("../../src/assets/sounds/on_stop_break.wav");
 const WARNING: &[u8] = include_bytes!("../../src/assets/sounds/warning.mp3");
 
-/// Map a cue name (matching the frontend) to its embedded bytes and extension.
-fn cue(name: &str) -> Option<(&'static [u8], &'static str)> {
-    match name {
-        "pre_break" => Some((PRE_BREAK, "wav")),
-        "stop_break" => Some((STOP_BREAK, "wav")),
-        "warning" => Some((WARNING, "mp3")),
-        _ => None,
-    }
-}
+/// Play a named cue, best-effort. Unknown names are ignored.
+pub fn play(name: &str) {
+    let bytes: &'static [u8] = match name {
+        "pre_break" => PRE_BREAK,
+        "stop_break" => STOP_BREAK,
+        "warning" => WARNING,
+        _ => return,
+    };
 
-/// Write a cue to a stable temp file (once) and return its path.
-fn ensure_file(name: &str, bytes: &[u8], ext: &str) -> std::io::Result<PathBuf> {
-    let mut dir = std::env::temp_dir();
-    dir.push("achieve-sounds");
-    std::fs::create_dir_all(&dir)?;
-    let path = dir.join(format!("{name}.{ext}"));
-    if !path.exists() {
-        std::fs::File::create(&path)?.write_all(bytes)?;
-    }
-    Ok(path)
-}
-
-/// Play a file through the first available system player. Runs on a worker
-/// thread so it neither blocks the UI nor leaves a zombie process behind.
-fn play_path(path: PathBuf) {
+    // Play on a worker thread: rodio's output stream must stay alive for the
+    // whole playback, so we hold it on this thread and block (not the UI) until
+    // the cue finishes, then let it drop.
+    let label = name.to_string();
     std::thread::spawn(move || {
-        // (binary, args that precede the file). Tried in order; the first that
-        // exists and exits cleanly wins. aplay is WAV-only, hence last.
-        let players: [(&str, &[&str]); 4] = [
-            ("pw-play", &[]),
-            ("paplay", &[]),
-            ("ffplay", &["-nodisp", "-autoexit", "-loglevel", "quiet"]),
-            ("aplay", &["-q"]),
-        ];
-        for (bin, args) in players {
-            match Command::new(bin).args(args).arg(&path).status() {
-                Ok(s) if s.success() => return,
-                _ => continue, // missing binary or decode failure: try the next
+        let (_stream, handle) = match rodio::OutputStream::try_default() {
+            Ok(v) => v,
+            Err(e) => {
+                eprintln!("[sound] no audio output: {e}");
+                return;
             }
+        };
+        let sink = match rodio::Sink::try_new(&handle) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("[sound] could not open audio sink: {e}");
+                return;
+            }
+        };
+        match rodio::Decoder::new(Cursor::new(bytes)) {
+            Ok(source) => {
+                sink.append(source);
+                sink.sleep_until_end();
+            }
+            Err(e) => eprintln!("[sound] decode {label} failed: {e}"),
         }
     });
-}
-
-/// Play a named cue, best-effort. Unknown names and IO failures are ignored.
-pub fn play(name: &str) {
-    if let Some((bytes, ext)) = cue(name) {
-        if let Ok(path) = ensure_file(name, bytes, ext) {
-            play_path(path);
-        }
-    }
 }

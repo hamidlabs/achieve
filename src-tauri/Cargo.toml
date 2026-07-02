@@ -31,6 +31,10 @@ libc = "0.2"
 # Blocking HTTP client for the Brevo transactional email API. Blocking fits the
 # engine's sync background thread; rustls avoids a system OpenSSL dependency.
 ureq = { version = "2", features = ["json", "tls"], default-features = false }
+# Pure-Rust audio playback for the app's cue sounds. The Tauri webview on Linux
+# (WebKitGTK) can't reliably play in-page audio, so we decode + play from Rust
+# via cpal/ALSA. Default features already cover WAV + MP3 decoding.
+rodio = "0.20"
 
 [profile.dev]
 incremental = true
