@@ -20,6 +20,7 @@ use tauri::{AppHandle, Emitter, Manager};
 
 use crate::db;
 use crate::email;
+use crate::notify;
 use crate::window;
 
 const TICK: Duration = Duration::from_secs(20);
@@ -41,6 +42,12 @@ pub fn spawn(app: AppHandle, db: Arc<Mutex<Connection>>, idle_flag: PathBuf, idl
         // even if the break window is hidden or the webview throttled its
         // countdown. Reset when the break ends.
         let mut break_chimed_over = false;
+        // Throttle snapshot emits to the UI: the loop can tick every second
+        // during a break, but the frontend never needs a re-render that often.
+        let mut last_emit: Option<Instant> = None;
+        // At-risk task notification cadence.
+        let mut last_risk_check: Option<Instant> = None;
+        let mut last_risk_notify: Option<Instant> = None;
         let mut last_email_attempt: Option<Instant> = None;
         // Startup catch-up: send today's summary on this boot even if we launched
         // after the configured hour. Cleared after the first send (or once we see
@@ -56,7 +63,10 @@ pub fn spawn(app: AppHandle, db: Arc<Mutex<Connection>>, idle_flag: PathBuf, idl
                     continue;
                 }
             };
-            let _ = app.emit("snapshot", &snap);
+            if last_emit.map(|t| t.elapsed() >= Duration::from_secs(2)).unwrap_or(true) {
+                let _ = app.emit("snapshot", &snap);
+                last_emit = Some(Instant::now());
+            }
 
             // Daily summary email. Cheap gate every tick; when due, throttle real
             // attempts so a failing send retries across the morning, not every
@@ -242,6 +252,58 @@ pub fn spawn(app: AppHandle, db: Arc<Mutex<Connection>>, idle_flag: PathBuf, idl
                 if due {
                     window::show_view(&app, "nudge");
                     last_nudge = Some(Instant::now());
+                }
+            }
+
+            // At-risk nudge: a big planned task barely started while the day's
+            // buffer is already gone (over-committed). Notify regardless of what
+            // is currently tracking, checked ~once a minute and fired at most
+            // every 30 minutes so it informs without nagging.
+            if last_risk_check.map(|t| t.elapsed() >= Duration::from_secs(60)).unwrap_or(true) {
+                last_risk_check = Some(Instant::now());
+                let buffer = snap.minutes_left_in_day - snap.minutes_committed;
+                if snap.minutes_left_in_day > 0 && buffer <= 0 {
+                    let worst = db
+                        .lock()
+                        .ok()
+                        .and_then(|c| db::list_tasks(&c).ok())
+                        .and_then(|tasks| {
+                            tasks
+                                .into_iter()
+                                .filter(|t| {
+                                    matches!(
+                                        t.status.as_str(),
+                                        "pending" | "paused" | "reopened" | "in_progress" | "awaiting"
+                                    )
+                                })
+                                // Barely started (<10% of a real estimate).
+                                .filter(|t| {
+                                    let est = t.estimate_min.unwrap_or(0);
+                                    est > 0 && t.tracked_min * 10 < est
+                                })
+                                .max_by_key(|t| t.estimate_min.unwrap_or(0))
+                                .map(|t| (t.title, t.estimate_min.unwrap_or(0)))
+                        });
+                    if let Some((title, est)) = worst {
+                        let due = last_risk_notify
+                            .map(|t| t.elapsed() >= Duration::from_secs(30 * 60))
+                            .unwrap_or(true);
+                        if due {
+                            last_risk_notify = Some(Instant::now());
+                            let est_h = est / 60;
+                            let plan = if est_h >= 1 {
+                                format!("~{est_h}h planned")
+                            } else {
+                                format!("~{est}m planned")
+                            };
+                            notify::send(
+                                "A task is slipping",
+                                &format!(
+                                    "\u{201c}{title}\u{201d} is barely started ({plan}) and today's buffer is gone. Time to switch?"
+                                ),
+                            );
+                        }
+                    }
                 }
             }
 

@@ -126,15 +126,23 @@ pub fn resize_only(app: &AppHandle, view: &str) {
 }
 
 /// Show the given view: resize, center, reveal, focus, and tell the frontend.
+/// The break view takes over the whole screen as a fullscreen, semi-transparent
+/// overlay (like a professional break app); every other view is the compact
+/// floating card, so we drop fullscreen on the way out.
 pub fn show_view(app: &AppHandle, view: &str) {
     // Lock to the break window while a break is in progress.
     let view = if break_lock(app, view) { "break" } else { view };
     if let Some(win) = app.get_webview_window("main") {
-        let (w, h) = size_for(view);
         // Switch the view before revealing so we don't flash the previous one.
         let _ = app.emit("navigate", view);
-        let _ = win.set_size(LogicalSize::new(w, h));
-        let _ = win.center();
+        if view == "break" {
+            let _ = win.set_fullscreen(true);
+        } else {
+            let _ = win.set_fullscreen(false);
+            let (w, h) = size_for(view);
+            let _ = win.set_size(LogicalSize::new(w, h));
+            let _ = win.center();
+        }
         let _ = win.show();
         let _ = win.set_focus();
         niri_reveal();

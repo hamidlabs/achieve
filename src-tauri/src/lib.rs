@@ -10,6 +10,7 @@ mod email;
 mod engine;
 mod idle;
 mod model;
+mod notify;
 mod niri;
 mod shutdown;
 mod sound;
