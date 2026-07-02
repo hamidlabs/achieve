@@ -224,11 +224,6 @@ pub fn spawn(app: AppHandle, db: Arc<Mutex<Connection>>, idle_flag: PathBuf, idl
                     .unwrap_or(true);
                 if due {
                     window::show_view(&app, "nudge");
-                    // Nudge with the warning cue when nothing is being tracked,
-                    // so the sound and the popup always arrive together.
-                    if snap.active_task_id.is_none() {
-                        crate::sound::play("warning");
-                    }
                     last_nudge = Some(Instant::now());
                 }
             }

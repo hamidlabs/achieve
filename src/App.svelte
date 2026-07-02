@@ -8,11 +8,17 @@
   import DashboardView from "./lib/views/DashboardView.svelte";
   import BreakView from "./lib/views/BreakView.svelte";
 
+  // Bumped on every navigate so the keyed view below remounts each time the
+  // engine surfaces a popup, even when the target view is unchanged. That makes
+  // each view's onMount fire on every popup, which is where the cue sounds live.
+  let navTick = $state(0);
+
   onMount(() => {
     refreshAll();
     initSound();
     const unNav = listen<View>("navigate", (e) => {
       store.view = e.payload;
+      navTick++;
       // The tasks hub auto-fits its height to content; nudge it to re-measure
       // whenever the engine surfaces it (it opens at the default "nudge" size).
       if (e.payload === "nudge") store.fitTick++;
@@ -41,7 +47,7 @@
       Waking up…
     </div>
   {:else}
-    {#key store.view}
+    {#key `${store.view}:${navTick}`}
       <div class="h-full rise">
         {#if store.view === "dashboard"}
           <DashboardView />

@@ -9,7 +9,8 @@
   import BreakSettingsPopover from "../components/BreakSettingsPopover.svelte";
   import { api } from "../api";
   import { store, go, refreshSnapshot, refreshTasks } from "../store.svelte";
-  import { taskDone } from "../sound";
+  import { onMount } from "svelte";
+  import { taskDone, noTaskWarning } from "../sound";
   import { fmtMin, catColor } from "../format";
   import type { Task, Bar, TimelineSpan } from "../types";
 
@@ -126,6 +127,15 @@
   const doneCount = $derived(completed.length);
   const totalCount = $derived(store.tasks.length);
   const bufferMin = $derived(Math.max(0, left - committed));
+
+  // Warn on mount when this popup surfaces and nothing is actively being
+  // tracked, i.e. no task is running (pick one) or a task is `awaiting` a
+  // decision after reaching its estimate ("task over"). The view remounts on
+  // every engine surface (App keys it on navTick), so this fires each popup.
+  onMount(() => {
+    const s = store.snapshot;
+    if (s && !(s.active_task_id != null && !s.active_awaiting)) noTaskWarning();
+  });
 
   // Active-task tracking (live via snapshot). When the task reaches its
   // estimate it is paused `awaiting` a decision: the clock is frozen at the
