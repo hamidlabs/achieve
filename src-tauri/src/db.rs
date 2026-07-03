@@ -1640,6 +1640,26 @@ fn remaining_committed(conn: &Connection, day: &str) -> Result<i64> {
     Ok(total)
 }
 
+/// The day's working window: local `HH:MM` of the first tracked segment's start
+/// and the last segment's end for `date` (excluding the Break task, so it's
+/// actual work). None if nothing was tracked that day.
+pub fn work_bounds(conn: &Connection, date: &str) -> Option<(String, String)> {
+    let btid = break_task_id(conn);
+    conn.query_row(
+        "SELECT strftime('%H:%M', MIN(start_at), 'localtime'),
+                strftime('%H:%M', MAX(COALESCE(end_at, strftime('%Y-%m-%d %H:%M:%S','now'))), 'localtime')
+         FROM segments
+         WHERE date(start_at,'localtime') = ?1 AND task_id <> COALESCE(?2, -1)",
+        params![date, btid],
+        |r| Ok((r.get::<_, Option<String>>(0)?, r.get::<_, Option<String>>(1)?)),
+    )
+    .ok()
+    .and_then(|(a, b)| match (a, b) {
+        (Some(a), Some(b)) => Some((a, b)),
+        _ => None,
+    })
+}
+
 fn minutes_until(conn: &Connection, hhmm: &str) -> i64 {
     let parts: Vec<&str> = hhmm.split(':').collect();
     let (h, m): (i64, i64) = match (parts.first(), parts.get(1)) {

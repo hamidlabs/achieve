@@ -132,8 +132,9 @@ pub fn build_payload(conn: &Connection, offset: i64) -> Result<Payload, String> 
     let reply_to = db::setting(conn, "email_reply_to").unwrap_or_else(|| from.clone());
 
     let dash = db::dashboard(conn, "day", offset).map_err(|e| e.to_string())?;
+    let work = db::work_bounds(conn, &dash.start_date);
     let subject = format!("Your day · {}", pretty_date(&dash.start_date));
-    let html = render_html(&dash);
+    let html = render_html(&dash, work.as_ref());
 
     Ok(Payload { api_key, from, from_name, reply_to, to, subject, html })
 }
@@ -173,12 +174,22 @@ pub fn send(p: &Payload) -> Result<(), String> {
 // Rendering
 // ---------------------------------------------------------------------------
 
-fn render_html(d: &Dashboard) -> String {
+fn render_html(d: &Dashboard, work: Option<&(String, String)>) -> String {
     let tracked = d.total_tracked_min;
     let untracked = d.distraction_min;
     let focus_pct = {
         let t = d.focus_min + d.distraction_min;
         if t > 0 { (d.focus_min * 100 + t / 2) / t } else { 0 }
+    };
+
+    // Working window line (first tracked start -> last tracked end).
+    let worked = match work {
+        Some((start, end)) => format!(
+            r#"<div style="font-size:13.5px;color:{INK};margin-top:8px;font-weight:600;">Worked {s} to {e}</div>"#,
+            s = fmt_time12(start),
+            e = fmt_time12(end),
+        ),
+        None => String::new(),
     };
 
     let mut s = String::new();
@@ -194,6 +205,7 @@ fn render_html(d: &Dashboard) -> String {
   <div style="font-size:11px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:{ACCENT};">Achieve · Daily summary</div>
   <div style="font-size:24px;font-weight:700;color:{INK};margin-top:6px;line-height:1.2;">{date}</div>
   <div style="font-size:14px;color:{MUTED};margin-top:4px;">Here's where your day went.</div>
+  {worked}
 </td></tr>
 "#,
         BG = BG,
@@ -201,6 +213,7 @@ fn render_html(d: &Dashboard) -> String {
         ACCENT = ACCENT,
         INK = INK,
         MUTED = MUTED,
+        worked = worked,
         tracked_lbl = fmt_min(tracked),
         untr_lbl = fmt_min(untracked),
         focus_pct = focus_pct,
@@ -452,6 +465,23 @@ fn fmt_min(min: i64) -> String {
     } else {
         format!("{r}m")
     }
+}
+
+/// "13:05" -> "1:05 PM". Falls back to the input on a parse miss.
+fn fmt_time12(hhmm: &str) -> String {
+    let mut it = hhmm.split(':');
+    let h: i32 = match it.next().and_then(|s| s.parse().ok()) {
+        Some(h) => h,
+        None => return hhmm.to_string(),
+    };
+    let m = it.next().unwrap_or("00");
+    let (h12, ap) = match h {
+        0 => (12, "AM"),
+        1..=11 => (h, "AM"),
+        12 => (12, "PM"),
+        _ => (h - 12, "PM"),
+    };
+    format!("{h12}:{m} {ap}")
 }
 
 /// Turn "2026-06-30" into "Tuesday, June 30".
