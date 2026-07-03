@@ -20,6 +20,7 @@ use tauri::{AppHandle, Emitter, Manager};
 
 use crate::db;
 use crate::email;
+use crate::media;
 use crate::notify;
 use crate::window;
 
@@ -131,9 +132,16 @@ pub fn spawn(app: AppHandle, db: Arc<Mutex<Connection>>, idle_flag: PathBuf, idl
             // (or sleeping with a task "running") never accrues phantom hours and
             // idle time is excluded from the untracked total. Stay quiet (no
             // nudges) while away.
+            //
+            // But input-idle isn't the same as away: watching a video tutorial or
+            // a screencast has no keyboard/mouse for minutes while the person is
+            // fully present. So if any media is actively playing we treat that as
+            // presence and keep tracking; we only pause on a true away (idle AND
+            // nothing playing), e.g. a phone call at the desk. When the media
+            // stops and input is still idle, the next tick pauses as usual.
             let idle = idle_flag.exists();
             if idle {
-                if !was_idle {
+                if !was_idle && !media::any_playing() {
                     was_idle = true;
                     if let Ok(c) = db.lock() {
                         if db::pause_for_idle(&c, idle_secs).unwrap_or(false) {

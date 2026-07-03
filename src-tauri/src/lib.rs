@@ -9,6 +9,7 @@ mod desktop;
 mod email;
 mod engine;
 mod idle;
+mod media;
 mod model;
 mod notify;
 mod niri;
