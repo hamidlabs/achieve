@@ -1027,10 +1027,7 @@ pub fn snapshot(conn: &Connection) -> Result<Snapshot> {
         |r| r.get(0),
     ).unwrap_or(0);
 
-    let minutes_committed: i64 = conn.query_row(
-        "SELECT COALESCE(SUM(estimate_min),0) FROM tasks
-         WHERE status IN ('pending','paused','reopened','in_progress','awaiting') AND (plan_date=?1 OR plan_date IS NULL)",
-        params![day], |r| r.get(0))?;
+    let minutes_committed: i64 = remaining_committed(conn, &day)?;
 
     let stop_time: Option<String> = conn
         .query_row("SELECT stop_time FROM day_plans WHERE date=?1", params![day], |r| r.get(0))
@@ -1615,6 +1612,32 @@ fn parse_hhmm_min(hhmm: &str) -> Option<i64> {
     } else {
         None
     }
+}
+
+/// Work still committed for the rest of the day: the sum of REMAINING minutes
+/// (estimate minus time already tracked) over live tasks planned for today.
+/// Using remaining work, not full estimates, is what makes "buffer =
+/// minutes_left - committed" mean actual free time: a task you've nearly
+/// finished no longer eats the whole day.
+fn remaining_committed(conn: &Connection, day: &str) -> Result<i64> {
+    let mut stmt = conn.prepare(
+        "SELECT id, COALESCE(estimate_min, 0), recurrence FROM tasks
+         WHERE status IN ('pending','paused','reopened','in_progress','awaiting')
+           AND (plan_date = ?1 OR plan_date IS NULL)",
+    )?;
+    let rows = stmt.query_map(params![day], |r| {
+        Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?, r.get::<_, Option<String>>(2)?))
+    })?;
+    let mut total = 0i64;
+    for row in rows {
+        let (id, est, rec) = row?;
+        if est <= 0 {
+            continue;
+        }
+        let tracked = tracked_minutes(conn, id, rec.as_deref() == Some("daily")).unwrap_or(0);
+        total += (est - tracked).max(0);
+    }
+    Ok(total)
 }
 
 fn minutes_until(conn: &Connection, hhmm: &str) -> i64 {
