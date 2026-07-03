@@ -37,6 +37,9 @@ pub fn spawn(app: AppHandle, db: Arc<Mutex<Connection>>, idle_flag: PathBuf, idl
         let mut started = false;
         let mut last_nudge: Option<Instant> = None;
         let mut was_idle = false;
+        // Last active task id we told the frontend about, to detect engine-side
+        // (auto-pause on idle/suspend) transitions and refresh the task list.
+        let mut last_active_seen: Option<Option<i64>> = None;
         let mut last_break_prompt: Option<Instant> = None;
         // Play the "break over" cue once per break, from the engine so it fires
         // even if the break window is hidden or the webview throttled its
@@ -137,6 +140,9 @@ pub fn spawn(app: AppHandle, db: Arc<Mutex<Connection>>, idle_flag: PathBuf, idl
                             if let Ok(s) = db::snapshot(&c) {
                                 let _ = app.emit("snapshot", &s);
                             }
+                            // The active task was auto-paused: refresh the list so
+                            // the UI drops the "tracking" card instead of freezing.
+                            let _ = app.emit("tasks-changed", ());
                         }
                     }
                 }
@@ -144,6 +150,20 @@ pub fn spawn(app: AppHandle, db: Arc<Mutex<Connection>>, idle_flag: PathBuf, idl
                 continue;
             }
             was_idle = false;
+
+            // Reconcile the frontend task list whenever the active task changed
+            // for a reason the frontend didn't initiate: idle/suspend auto-pause
+            // (the suspend guard runs in another thread), estimate pause, or an
+            // external edit. Without this the UI keeps a stale "tracking" card
+            // with a frozen clock after unlocking / waking. First tick just seeds
+            // the value so we don't emit spuriously at startup.
+            match last_active_seen {
+                Some(prev) if prev != snap.active_task_id => {
+                    let _ = app.emit("tasks-changed", ());
+                }
+                _ => {}
+            }
+            last_active_seen = Some(snap.active_task_id);
 
             // First surface after launch: the unified task hub (planning is
             // merged in, so there's no separate planner anymore).
