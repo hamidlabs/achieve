@@ -22,6 +22,7 @@ use crate::db;
 use crate::email;
 use crate::media;
 use crate::notify;
+use crate::reminder;
 use crate::window;
 
 const TICK: Duration = Duration::from_secs(20);
@@ -30,6 +31,9 @@ const RENUDGE_AFTER: Duration = Duration::from_secs(5 * 60);
 // On a failed daily-email send, wait this long before retrying (so a bad key or
 // a network blip retries a few times across the morning, not every 20s).
 const EMAIL_RETRY: Duration = Duration::from_secs(10 * 60);
+// How often to check for reminders to schedule/fire (kept independent of TICK so
+// it stays ~steady even while the loop spins every 1s during a break).
+const REMINDER_INTERVAL: Duration = Duration::from_secs(20);
 
 pub fn spawn(app: AppHandle, db: Arc<Mutex<Connection>>, idle_flag: PathBuf, idle_secs: i64) {
     thread::spawn(move || {
@@ -53,6 +57,7 @@ pub fn spawn(app: AppHandle, db: Arc<Mutex<Connection>>, idle_flag: PathBuf, idl
         let mut last_risk_check: Option<Instant> = None;
         let mut last_risk_notify: Option<Instant> = None;
         let mut last_email_attempt: Option<Instant> = None;
+        let mut last_reminder_check: Option<Instant> = None;
         // Startup catch-up: send today's summary on this boot even if we launched
         // after the configured hour. Cleared after the first send (or once we see
         // today's is already sent) so it can't re-fire at midnight on later days.
@@ -70,6 +75,15 @@ pub fn spawn(app: AppHandle, db: Arc<Mutex<Connection>>, idle_flag: PathBuf, idl
             if last_emit.map(|t| t.elapsed() >= Duration::from_secs(2)).unwrap_or(true) {
                 let _ = app.emit("snapshot", &snap);
                 last_emit = Some(Instant::now());
+            }
+
+            // Presence heartbeat: mark the app alive so the next launch can book
+            // the intervening downtime (machine off / app not running) as away.
+            // Then keep TODAY's away ledger materialized as the complement of
+            // present time, so the live day's buckets tile without overlap.
+            if let Ok(c) = db.lock() {
+                let _ = db::touch_seen(&c);
+                let _ = db::reconcile_today(&c);
             }
 
             // Daily summary email. Cheap gate every tick; when due, throttle real
@@ -105,6 +119,14 @@ pub fn spawn(app: AppHandle, db: Arc<Mutex<Connection>>, idle_flag: PathBuf, idl
                 last_email_attempt = None;
             }
 
+            // Task reminders: schedule those entering the 72h window, fire due
+            // ones (email via the worker + desktop notification), and advance
+            // recurrence. HTTP happens off the DB lock inside dispatch.
+            if last_reminder_check.map(|t| t.elapsed() >= REMINDER_INTERVAL).unwrap_or(true) {
+                last_reminder_check = Some(Instant::now());
+                reminder::dispatch(&db);
+            }
+
             // Day rollover: when the local day changes (or at startup, catching a
             // launch after midnight), stop any tracking that crossed midnight and
             // surface yesterday's leftover task on today's list.
@@ -112,7 +134,10 @@ pub fn spawn(app: AppHandle, db: Arc<Mutex<Connection>>, idle_flag: PathBuf, idl
             if !day.is_empty() && day != current_day {
                 current_day = day;
                 if let Ok(c) = db.lock() {
-                    if db::rollover_day(&c).unwrap_or(false) {
+                    let rolled = db::rollover_day(&c).unwrap_or(false);
+                    // Seal the day that just ended into a complete away ledger.
+                    let _ = db::seal_past_days(&c);
+                    if rolled {
                         if let Ok(s) = db::snapshot(&c) {
                             let _ = app.emit("snapshot", &s);
                         }
@@ -156,6 +181,13 @@ pub fn spawn(app: AppHandle, db: Arc<Mutex<Connection>>, idle_flag: PathBuf, idl
                 }
                 thread::sleep(TICK);
                 continue;
+            }
+            // Returned from an idle episode: close the open away span at now so
+            // the away bucket captures exactly the time the user was gone.
+            if was_idle {
+                if let Ok(c) = db.lock() {
+                    let _ = db::close_open_away(&c, &crate::db::now());
+                }
             }
             was_idle = false;
 

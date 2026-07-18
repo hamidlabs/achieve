@@ -28,7 +28,17 @@
     compact?: boolean;
   } = $props();
 
-  const UNTR = "#c2c6cf";
+  // Three presence buckets, each a clearly distinct hue:
+  //   Focus = teal accent, Untracked (distraction) = amber, Away (idle) = grey.
+  const FOCUS = "var(--color-accent)";
+  const UNTR = "#e6a23c";
+  const AWAY = "#9aa0aa";
+  const spanFill = (kind: string) =>
+    kind === "focus" ? "url(#gfocus)" : kind === "away" ? "url(#gaway)" : "url(#guntr)";
+  const spanStroke = (kind: string) =>
+    kind === "focus" ? "var(--color-accent)" : kind === "away" ? AWAY : "#d18e28";
+  const spanLabelColor = (kind: string) =>
+    kind === "focus" ? "var(--color-accent)" : kind === "away" ? AWAY : "#c2831f";
 
   const wrapClass = $derived(
     tone === "bare"
@@ -41,6 +51,14 @@
   const LPAD = 30;
   const RPAD = 12;
   const TPAD = $derived(compact ? 8 : 16);
+  // Away has no per-instant "amount", so it draws as a slim grey rail sitting
+  // right AT the baseline (RAIL_GAP = 0), marking "not at the machine here". The
+  // humps rest on BASE and the rail hangs just below it, so at every away↔active
+  // boundary the rail meets the hump base on the baseline with no floating gap,
+  // yet the two never share area (rail below the line, humps above it).
+  const RAIL_H = $derived(compact ? 4 : 7);
+  const RAIL_GAP = $derived(0);
+  const BASE = $derived(H - RAIL_H - RAIL_GAP);
 
   const useTimeline = $derived(period === "day" && timeline.length > 0 && dayEndMin > 0);
 
@@ -69,10 +87,15 @@
   const tl = $derived.by(() => {
     const span = Math.max(1, vMax - vMin);
     const innerW = Math.max(0, chartW - LPAD - RPAD);
-    const plotH = H - TPAD;
+    const plotH = BASE - TPAD;
     const xAt = (t: number) => LPAD + ((t - vMin) / span) * innerW;
     const visible = timeline.filter((s) => s.end_min > vMin && s.start_min < vMax);
-    const rawMax = Math.max(1, ...visible.map((s) => s.end_min - s.start_min));
+    // Away (idle / suspend / machine-off) has no "amount" per instant: it is
+    // context, not a measured quantity. So the y-scale is driven only by Focus
+    // and Untracked durations, and away renders as a full-height background band
+    // that simply marks "you weren't at the machine here" — filling every gap.
+    const measured = visible.filter((s) => s.kind !== "away");
+    const rawMax = Math.max(1, ...measured.map((s) => s.end_min - s.start_min));
     const step = 15;
     const yMax = Math.max(step, Math.ceil(rawMax / step) * step);
     const yAt = (v: number) => TPAD + (1 - v / yMax) * plotH;
@@ -80,7 +103,8 @@
       const x0 = Math.max(LPAD, xAt(s.start_min));
       const x1 = Math.min(chartW - RPAD, xAt(s.end_min));
       const dur = s.end_min - s.start_min;
-      return { ...s, i, dur, x0, x1: Math.max(x0 + 1.5, x1), w: Math.max(1.5, x1 - x0), cx: (x0 + x1) / 2, y: yAt(dur) };
+      const isAway = s.kind === "away";
+      return { ...s, i, dur, isAway, x0, x1: Math.max(x0 + 1.5, x1), w: Math.max(1.5, x1 - x0), cx: (x0 + x1) / 2, y: isAway ? H - RAIL_H : yAt(dur) };
     });
     const grid = [0, 0.5, 1].map((f) => ({ y: yAt(yMax * f), val: Math.round(yMax * f) }));
     // session boundary clock labels within the view, thinned
@@ -100,7 +124,7 @@
   // ---- WEEK / MONTH stacked bars ----
   const chart = $derived.by(() => {
     const n = bars.length;
-    const rawMax = Math.max(1, ...bars.map((b) => b.focus_min + b.untracked_min));
+    const rawMax = Math.max(1, ...bars.map((b) => b.focus_min + b.untracked_min + b.away_min));
     const step = period === "week" ? 60 : 15;
     const max = Math.max(step, Math.ceil(rawMax / step) * step);
     const innerW = Math.max(0, chartW - LPAD - RPAD);
@@ -112,37 +136,46 @@
     const segs = bars.map((b, i) => {
       const fH = hOf(b.focus_min);
       const uH = hOf(b.untracked_min);
+      const aH = hOf(b.away_min);
       const fy = H - fH;
       const uy = fy - uH;
-      const total = b.focus_min + b.untracked_min;
-      return { i, f: b.focus_min, u: b.untracked_min, total, x: cx(i) - barW / 2, w: barW, cx: cx(i), fH, uH, fy, uy, topY: total > 0 ? uy : H };
+      const ay = uy - aH; // away stacks on top
+      const total = b.focus_min + b.untracked_min + b.away_min;
+      // Layers bottom -> top; only non-zero ones. The topmost gets a rounded cap.
+      const layers: { y: number; h: number; color: string; op: number }[] = [];
+      if (b.focus_min > 0) layers.push({ y: fy, h: fH, color: FOCUS, op: 0.95 });
+      if (b.untracked_min > 0) layers.push({ y: uy, h: uH, color: UNTR, op: 1 });
+      if (b.away_min > 0) layers.push({ y: ay, h: aH, color: AWAY, op: 1 });
+      return { i, f: b.focus_min, u: b.untracked_min, a: b.away_min, total, x: cx(i) - barW / 2, w: barW, cx: cx(i), layers, topY: total > 0 ? ay : H };
     });
     const grid = [0, 0.5, 1].map((f) => ({ y: TPAD + (1 - f) * plotH, val: Math.round(max * f) }));
     return { n, max, innerW, bandW, barW, cx, segs, grid };
   });
 
   const hasData = $derived(
-    useTimeline ? timeline.length > 0 : bars.some((b) => b.focus_min + b.untracked_min > 0),
+    useTimeline
+      ? timeline.length > 0
+      : bars.some((b) => b.focus_min + b.untracked_min + b.away_min > 0),
   );
   const R = $derived(compact ? 1.5 : 2.5);
 
   // Rounded-top hump (square bottom) for a session's filled area.
   function hump(x: number, y: number, w: number, r: number): string {
-    const h = H - y;
+    const h = BASE - y;
     if (h <= 0.4) return "";
     const rr = Math.min(r, w / 2, h);
-    return `M${x.toFixed(1)} ${H} L${x.toFixed(1)} ${(y + rr).toFixed(1)} `
+    return `M${x.toFixed(1)} ${BASE.toFixed(1)} L${x.toFixed(1)} ${(y + rr).toFixed(1)} `
       + `Q${x.toFixed(1)} ${y.toFixed(1)} ${(x + rr).toFixed(1)} ${y.toFixed(1)} `
       + `L${(x + w - rr).toFixed(1)} ${y.toFixed(1)} `
       + `Q${(x + w).toFixed(1)} ${y.toFixed(1)} ${(x + w).toFixed(1)} ${(y + rr).toFixed(1)} `
-      + `L${(x + w).toFixed(1)} ${H} Z`;
+      + `L${(x + w).toFixed(1)} ${BASE.toFixed(1)} Z`;
   }
   function humpLine(x0: number, x1: number, y: number, r: number): string {
-    const rr = Math.min(r, (x1 - x0) / 2, H - y);
-    return `M${x0.toFixed(1)} ${H} L${x0.toFixed(1)} ${(y + rr).toFixed(1)} `
+    const rr = Math.min(r, (x1 - x0) / 2, BASE - y);
+    return `M${x0.toFixed(1)} ${BASE.toFixed(1)} L${x0.toFixed(1)} ${(y + rr).toFixed(1)} `
       + `Q${x0.toFixed(1)} ${y.toFixed(1)} ${(x0 + rr).toFixed(1)} ${y.toFixed(1)} `
       + `L${(x1 - rr).toFixed(1)} ${y.toFixed(1)} `
-      + `Q${x1.toFixed(1)} ${y.toFixed(1)} ${x1.toFixed(1)} ${(y + rr).toFixed(1)} L${x1.toFixed(1)} ${H}`;
+      + `Q${x1.toFixed(1)} ${y.toFixed(1)} ${x1.toFixed(1)} ${(y + rr).toFixed(1)} L${x1.toFixed(1)} ${BASE.toFixed(1)}`;
   }
   function rTop(x: number, y: number, w: number, h: number, r: number): string {
     if (h <= 0.4) return "";
@@ -239,6 +272,9 @@
         <span class="inline-flex items-center gap-1.5">
           <span class="w-2.5 h-2.5 rounded-[3px]" style="background: {UNTR};"></span> Untracked
         </span>
+        <span class="inline-flex items-center gap-1.5">
+          <span class="w-2.5 h-2.5 rounded-[3px]" style="background: {AWAY};"></span> Away
+        </span>
       </div>
     </div>
   {/if}
@@ -257,6 +293,10 @@
             <stop offset="0%" stop-color={UNTR} stop-opacity="0.5" />
             <stop offset="100%" stop-color={UNTR} stop-opacity="0.05" />
           </linearGradient>
+          <linearGradient id="gaway" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color={AWAY} stop-opacity="0.42" />
+            <stop offset="100%" stop-color={AWAY} stop-opacity="0.04" />
+          </linearGradient>
         </defs>
 
         {#if useTimeline}
@@ -266,15 +306,24 @@
             <text x={LPAD - 6} y={g.y + 3} text-anchor="end"
               font-size="8.5" fill="var(--color-ink-ghost)">{g.val ? fmtMin(g.val) : "0"}</text>
           {/each}
-          {#each tl.items as it (it.start_min)}
-            {@const dim = hoverIdx !== null && hoverIdx !== it.start_min}
-            <path d={hump(it.x0, it.y, it.w, R)} fill={it.focus ? "url(#gfocus)" : "url(#guntr)"} opacity={dim ? 0.5 : 1} />
-            <path d={humpLine(it.x0, it.x1, it.y, R)} fill="none"
-              stroke={it.focus ? "var(--color-accent)" : "#aab0ba"} stroke-width={it.focus ? 2 : 1.5}
-              stroke-linejoin="round" opacity={dim ? 0.55 : 1} />
-            {#if !compact && it.w >= 26}
-              <text x={it.cx} y={it.y - 5} text-anchor="middle" font-size="9" font-weight="600"
-                fill={it.focus ? "var(--color-accent)" : "#9aa0aa"}>{fmtMin(it.dur)}</text>
+          {#each tl.items as it (it.i)}
+            {#if it.isAway}
+              {@const dim = hoverIdx !== null && hoverIdx !== it.start_min}
+              <rect x={it.x0} y={it.y} width={it.w} height={RAIL_H}
+                fill={AWAY} opacity={dim ? 0.3 : 0.6} />
+            {/if}
+          {/each}
+          {#each tl.items as it (it.i)}
+            {#if !it.isAway}
+              {@const dim = hoverIdx !== null && hoverIdx !== it.start_min}
+              <path d={hump(it.x0, it.y, it.w, R)} fill={spanFill(it.kind)} opacity={dim ? 0.5 : 1} />
+              <path d={humpLine(it.x0, it.x1, it.y, R)} fill="none"
+                stroke={spanStroke(it.kind)} stroke-width={it.kind === "focus" ? 2 : 1.5}
+                stroke-linejoin="round" opacity={dim ? 0.55 : 1} />
+              {#if !compact && it.w >= 26}
+                <text x={it.cx} y={it.y - 5} text-anchor="middle" font-size="9" font-weight="600"
+                  fill={spanLabelColor(it.kind)}>{fmtMin(it.dur)}</text>
+              {/if}
             {/if}
           {/each}
         {:else}
@@ -290,19 +339,18 @@
           {/if}
           {#each chart.segs as s (s.i)}
             {@const dim = hoverIdx !== null && hoverIdx !== s.i}
-            {#if s.f > 0 && s.u > 0}
-              <rect x={s.x} y={s.fy} width={s.w} height={s.fH} fill="var(--color-accent)" opacity={dim ? 0.5 : 0.95} />
-              <path d={rTop(s.x, s.uy, s.w, s.uH, R)} fill={UNTR} opacity={dim ? 0.5 : 1} />
-            {:else if s.f > 0}
-              <path d={rTop(s.x, s.fy, s.w, s.fH, R)} fill="var(--color-accent)" opacity={dim ? 0.5 : 0.95} />
-            {:else if s.u > 0}
-              <path d={rTop(s.x, s.uy, s.w, s.uH, R)} fill={UNTR} opacity={dim ? 0.5 : 1} />
-            {/if}
+            {#each s.layers as L, li (li)}
+              {#if li === s.layers.length - 1}
+                <path d={rTop(s.x, L.y, s.w, L.h, R)} fill={L.color} opacity={dim ? 0.5 : L.op} />
+              {:else}
+                <rect x={s.x} y={L.y} width={s.w} height={L.h} fill={L.color} opacity={dim ? 0.5 : L.op} />
+              {/if}
+            {/each}
           {/each}
           {#each chart.segs as s (s.i)}
             {#if showVal(s.i)}
               <text x={s.cx} y={s.topY - 5} text-anchor="middle" font-size="9" font-weight="600"
-                fill={s.f > 0 ? "var(--color-accent)" : "#9aa0aa"}>{fmtMin(s.f > 0 ? s.f : s.u)}</text>
+                fill="var(--color-ink-faint)">{fmtMin(s.total)}</text>
             {/if}
           {/each}
         {/if}
@@ -329,7 +377,7 @@
         <div class="pointer-events-none absolute z-30 rounded-[var(--radius-md)] px-3 py-2.5 text-[11px] min-w-[150px] chart-tip"
           style="left: {Math.min(Math.max(it.cx, 84), chartW - 84)}px; top: {it.y - 6}px; transform: translate(-50%, -100%);">
           <div class="flex items-center gap-1.5 pb-1.5 mb-1.5" style="border-bottom: 1px solid rgba(255,255,255,0.16);">
-            <span class="w-2 h-2 rounded-full shrink-0" style="background: {it.focus ? it.color : UNTR};"></span>
+            <span class="w-2 h-2 rounded-full shrink-0" style="background: {it.kind === 'focus' ? it.color : it.kind === 'away' ? AWAY : UNTR};"></span>
             <span class="font-semibold truncate">{it.label}</span>
             <span class="ml-auto pl-2 tabular-nums font-medium shrink-0">{fmtMin(it.dur)}</span>
           </div>
@@ -356,6 +404,10 @@
           <div class="flex items-center gap-1.5 whitespace-nowrap mt-0.5">
             <span class="w-2 h-2 rounded-[2px]" style="background: {UNTR};"></span>
             Untracked <span class="ml-auto pl-3 tabular-nums font-medium">{fmtMin(b.untracked_min)}</span>
+          </div>
+          <div class="flex items-center gap-1.5 whitespace-nowrap mt-0.5">
+            <span class="w-2 h-2 rounded-[2px]" style="background: {AWAY};"></span>
+            Away <span class="ml-auto pl-3 tabular-nums font-medium">{fmtMin(b.away_min)}</span>
           </div>
         </div>
       {/if}

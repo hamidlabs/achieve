@@ -161,10 +161,11 @@
       </div>
 
       <!-- Stat tiles -->
-      <div class="grid grid-cols-4 gap-3">
+      <div class="grid grid-cols-5 gap-3">
         {@render tile("Tracked", fmtMin(d.total_tracked_min), "var(--color-accent)")}
         {@render tile("Focus", `${focusPct}%`, "var(--color-positive)")}
         {@render tile("Untracked", fmtMin(d.distraction_min), "var(--color-warn)")}
+        {@render tile("Away", fmtMin(d.away_min), "#9aa0aa")}
         {@render tile("Completed", `${d.completed}/${d.total_tasks}`, "var(--color-accent-2)")}
       </div>
 

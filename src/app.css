@@ -8,11 +8,14 @@
   --font-sans: -apple-system, "SF Pro Text", system-ui, "Inter", "Helvetica Neue",
     sans-serif;
 
-  /* ink (text) */
+  /* ink (text) — grays darkened so muted text meets WCAG AA (>=4.5:1 on the
+     light glass). --ink-faint carries readable secondary/placeholder text
+     (~5:1); --ink-ghost is the lightest tier for small decorative labels,
+     chevrons, and chart ticks (~3.8:1, above the 3:1 non-text bar). */
   --color-ink: #1d1d1f;
   --color-ink-soft: #494951;
-  --color-ink-faint: #86868b;
-  --color-ink-ghost: #aeaeb2;
+  --color-ink-faint: #656569;
+  --color-ink-ghost: #79797f;
 
   /* Accent = the break-UI teal (was Apple blue) */
   --color-accent: #18a89e;
@@ -198,7 +201,8 @@ body {
   transition: border 0.12s ease, box-shadow 0.12s ease;
 }
 .field::placeholder {
-  color: var(--color-ink-ghost);
+  /* Placeholders are real text: use the AA-legible faint tier, not ghost. */
+  color: var(--color-ink-faint);
 }
 .field:focus {
   border-color: var(--color-accent);

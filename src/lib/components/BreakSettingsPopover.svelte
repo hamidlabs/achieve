@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import Icon from "../icons/Icon.svelte";
+  import Overlay from "../ui/Overlay.svelte";
   import { api } from "../api";
   import { isMuted, setMuted, breakStart } from "../sound";
   import type { BreakSettings } from "../types";
@@ -33,9 +34,7 @@
   }
 </script>
 
-<button class="catch no-drag" aria-label="Close" onclick={onClose}></button>
-
-<div class="pop no-drag">
+<Overlay variant="popover" maxWidth={280} pad={12} {onClose}>
   <div class="flex items-center gap-2 mb-3">
     <span class="orb"><Icon name="coffee" size={14} /></span>
     <div class="text-[13px] font-semibold text-ink flex-1">Breaks</div>
@@ -69,7 +68,7 @@
   </div>
 
   <button class="done" onclick={onClose}>Done</button>
-</div>
+</Overlay>
 
 {#snippet stepper(label: string, value: number, unit: string, dec: () => void, inc: () => void)}
   <div class="flex items-center justify-between py-1">
@@ -83,21 +82,6 @@
 {/snippet}
 
 <style>
-  .catch { position: fixed; inset: 0; z-index: 40; background: transparent; cursor: default; }
-  .pop {
-    position: fixed;
-    z-index: 50;
-    width: 280px;
-    left: 50%;
-    top: 50%;
-    transform: translate(-50%, -50%);
-    background: #fff;
-    border: 0.5px solid var(--line-strong);
-    border-radius: var(--radius-lg);
-    box-shadow: 0 16px 40px -10px rgba(0, 0, 0, 0.38);
-    padding: 12px;
-    animation: fade 0.16s ease both;
-  }
   .orb {
     width: 24px; height: 24px; display: grid; place-items: center; border-radius: 999px;
     color: #2aa39a; background: color-mix(in oklab, #2aa39a 12%, white);

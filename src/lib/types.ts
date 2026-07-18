@@ -51,10 +51,52 @@ export interface Snapshot {
   planned_today: boolean;
   /** Continuous tracked work minutes since the last break. */
   worked_since_break_min: number;
+  /** Minutes away from the machine (idle) today: the third presence bucket. */
+  away_today_min: number;
   /** True while on a break (the Break task is active). */
   on_break: boolean;
   /** Seconds left in the current break (<=0 once it's over). */
   break_remaining_sec: number;
+}
+
+export type ReminderChannel = "email" | "notification" | "both";
+
+// A recurrence rule string understood by the backend. null = one-shot.
+export type Rrule =
+  | "daily"
+  | "weekdays"
+  | "weekly"
+  | "biweekly"
+  | "monthly"
+  | "yearly"
+  | string; // "every:N:days" | "every:N:weeks" | "every:N:months"
+
+export interface Reminder {
+  id: number;
+  task_id: number;
+  /** Next fire time as local "YYYY-MM-DD HH:MM". */
+  remind_at_local: string;
+  /** Next fire time, UTC. */
+  remind_at: string;
+  rrule: Rrule | null;
+  /** Inclusive recurrence end, local "YYYY-MM-DD". */
+  rrule_until: string | null;
+  rrule_count: number | null;
+  channel: ReminderChannel;
+  note: string | null;
+  status: "pending" | "scheduled" | "sent" | "cancelled" | "failed";
+}
+
+/** What the reminder editor emits; persisted as-is (create) or deferred (new task). */
+export interface ReminderSpec {
+  /** Local "YYYY-MM-DD HH:MM". */
+  remind_at: string;
+  rrule: Rrule | null;
+  /** Local "YYYY-MM-DD" end date, or null. */
+  until: string | null;
+  count: number | null;
+  channel: ReminderChannel;
+  note: string | null;
 }
 
 export interface BreakSettings {
@@ -113,6 +155,7 @@ export interface Bar {
   label: string;
   focus_min: number;
   untracked_min: number;
+  away_min: number;
   top: string;
   top_color: string;
 }
@@ -122,7 +165,7 @@ export type DashPeriod = "day" | "week" | "month";
 export interface TimelineSpan {
   start_min: number;
   end_min: number;
-  focus: boolean;
+  kind: "focus" | "untracked" | "away";
   label: string;
   color: string;
 }
@@ -134,6 +177,7 @@ export interface Dashboard {
   total_tracked_min: number;
   focus_min: number;
   distraction_min: number;
+  away_min: number;
   completed: number;
   total_tasks: number;
   by_category: CategoryStat[];

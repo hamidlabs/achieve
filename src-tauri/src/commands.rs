@@ -3,7 +3,7 @@
 use tauri::{AppHandle, Manager, State};
 
 use crate::db;
-use crate::model::{BreakSettings, Category, Dashboard, DayPlan, FocusSpan, Snapshot, Task};
+use crate::model::{BreakSettings, Category, Dashboard, DayPlan, FocusSpan, Reminder, Snapshot, Task};
 use crate::window;
 use crate::AppState;
 
@@ -184,6 +184,8 @@ pub fn set_break_settings(state: State<'_, AppState>, settings: BreakSettings) -
 pub fn start_break(state: State<'_, AppState>, app: AppHandle) -> CmdResult<()> {
     with_db!(state, c => db::start_break(&c))?;
     let _ = emit_snapshot(&app, &state);
+    // Now that the break is actually running, dim the second monitor too.
+    crate::window::cover_second_monitor(&app);
     Ok(())
 }
 
@@ -192,6 +194,7 @@ pub fn start_break(state: State<'_, AppState>, app: AppHandle) -> CmdResult<()> 
 pub fn end_break(state: State<'_, AppState>, app: AppHandle, resume: bool) -> CmdResult<()> {
     with_db!(state, c => db::end_break(&c, resume))?;
     let _ = emit_snapshot(&app, &state);
+    crate::window::hide_veil(&app);
     Ok(())
 }
 
@@ -262,6 +265,11 @@ pub fn fit_window(app: AppHandle, height: f64) -> CmdResult<()> {
 
 #[tauri::command]
 pub fn dismiss_popup(app: AppHandle) -> CmdResult<()> {
+    // Dismissing the break also drops the second-monitor dimming veil.
+    if let Some(veil) = app.get_webview_window("veil") {
+        let _ = veil.set_fullscreen(false);
+        let _ = veil.hide();
+    }
     if let Some(win) = app.get_webview_window("main") {
         win.hide().map_err(err)?;
     }
@@ -295,4 +303,72 @@ pub fn send_summary_now(state: State<'_, AppState>, offset: Option<i64>) -> CmdR
 #[tauri::command]
 pub fn play_sound(name: String) {
     crate::sound::play(&name);
+}
+
+// ---- reminders ----
+
+#[tauri::command]
+pub fn list_reminders(state: State<'_, AppState>, task_id: i64) -> CmdResult<Vec<Reminder>> {
+    with_db!(state, c => db::list_reminders(&c, task_id))
+}
+
+/// Create a reminder. `remind_at` is local "YYYY-MM-DD HH:MM"; `until` (optional)
+/// is a local end date "YYYY-MM-DD". The engine schedules/sends it.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub fn create_reminder(
+    state: State<'_, AppState>,
+    task_id: i64,
+    remind_at: String,
+    rrule: Option<String>,
+    until: Option<String>,
+    count: Option<i64>,
+    channel: String,
+    note: Option<String>,
+) -> CmdResult<i64> {
+    with_db!(state, c => db::create_reminder(
+        &c, task_id, &remind_at, rrule.as_deref(), until.as_deref(), count, &channel, note.as_deref()
+    ))
+}
+
+/// Update a reminder. Cancels any live worker schedule first (so the old email
+/// doesn't still go out), then rewrites the row as pending for re-evaluation.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub fn update_reminder(
+    state: State<'_, AppState>,
+    id: i64,
+    remind_at: String,
+    rrule: Option<String>,
+    until: Option<String>,
+    count: Option<i64>,
+    channel: String,
+    note: Option<String>,
+) -> CmdResult<()> {
+    let (url, key, mid) = {
+        let c = state.db.lock().map_err(err)?;
+        let (u, k) = crate::email::worker_creds(&c);
+        (u, k, db::reminder_message_id(&c, id))
+    };
+    if let Some(mid) = mid {
+        let _ = crate::email::worker_cancel(&url, &key, &mid);
+    }
+    let c = state.db.lock().map_err(err)?;
+    db::update_reminder(&c, id, &remind_at, rrule.as_deref(), until.as_deref(), count, &channel, note.as_deref())
+        .map_err(err)
+}
+
+/// Delete (cancel) a reminder, tearing down any live worker schedule.
+#[tauri::command]
+pub fn delete_reminder(state: State<'_, AppState>, id: i64) -> CmdResult<()> {
+    let (url, key, mid) = {
+        let c = state.db.lock().map_err(err)?;
+        let (u, k) = crate::email::worker_creds(&c);
+        (u, k, db::reminder_message_id(&c, id))
+    };
+    if let Some(mid) = mid {
+        let _ = crate::email::worker_cancel(&url, &key, &mid);
+    }
+    let c = state.db.lock().map_err(err)?;
+    db::cancel_reminder(&c, id).map_err(err)
 }

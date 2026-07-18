@@ -48,23 +48,40 @@ fn run_sleep(db: Arc<Mutex<Connection>>) -> zbus::Result<()> {
 
     for msg in proxy.receive_signal("PrepareForSleep")? {
         let body = msg.body();
-        if let Ok(true) = body.deserialize::<bool>() {
-            if let Ok(conn) = db.lock() {
-                let _ = conn.execute(
-                    "UPDATE segments SET end_at = strftime('%Y-%m-%d %H:%M:%S','now'),
-                            reason = COALESCE(reason,'auto-suspend') WHERE end_at IS NULL",
-                    [],
-                );
-                let _ = conn.execute(
-                    "UPDATE focus_log SET end_at = strftime('%Y-%m-%d %H:%M:%S','now') WHERE end_at IS NULL",
-                    [],
-                );
-                let _ = conn.execute(
-                    "UPDATE tasks SET status='paused',
-                            updated_at=strftime('%Y-%m-%d %H:%M:%S','now') WHERE status='in_progress'",
-                    [],
-                );
+        match body.deserialize::<bool>() {
+            Ok(true) => {
+                // About to freeze: cap the open work + focus spans at now and
+                // pause the active task, then OPEN an away span at the freeze
+                // instant. The whole suspend becomes real away time in the
+                // ledger, closed on resume.
+                if let Ok(conn) = db.lock() {
+                    let n = crate::db::now();
+                    let _ = conn.execute(
+                        "UPDATE segments SET end_at = ?1,
+                                reason = COALESCE(reason,'auto-suspend') WHERE end_at IS NULL",
+                        rusqlite::params![n],
+                    );
+                    let _ = conn.execute(
+                        "UPDATE focus_log SET end_at = ?1 WHERE end_at IS NULL",
+                        rusqlite::params![n],
+                    );
+                    let _ = conn.execute(
+                        "UPDATE tasks SET status='paused', updated_at=?1 WHERE status='in_progress'",
+                        rusqlite::params![n],
+                    );
+                    let _ = crate::db::open_away(&conn, &n, "suspend");
+                    let _ = crate::db::touch_seen(&conn);
+                }
             }
+            Ok(false) => {
+                // Resumed: close the away span opened at freeze at now, so the
+                // away bucket captures exactly the time the machine slept.
+                if let Ok(conn) = db.lock() {
+                    let _ = crate::db::close_open_away(&conn, &crate::db::now());
+                    let _ = crate::db::touch_seen(&conn);
+                }
+            }
+            _ => {}
         }
     }
     Ok(())
