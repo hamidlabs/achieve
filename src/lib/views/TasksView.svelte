@@ -5,7 +5,8 @@
   import ProgressRing from "../ui/ProgressRing.svelte";
   import ActivityChart from "../ui/ActivityChart.svelte";
   import TaskEditor from "../components/TaskEditor.svelte";
-  import DatePopover from "../components/DatePopover.svelte";
+  import Overlay from "../ui/Overlay.svelte";
+  import DatePicker from "../ui/DatePicker.svelte";
   import BreakSettingsPopover from "../components/BreakSettingsPopover.svelte";
   import { api } from "../api";
   import { store, go, refreshSnapshot, refreshTasks } from "../store.svelte";
@@ -49,7 +50,19 @@
   let switching = $state(false);
   let showBreakSettings = $state(false);
   let editStop = $state(false);
+  let savingStop = $state(false);
   let stopTime = $state(store.dayplan?.stop_time ?? "18:00");
+  // store.dayplan loads asynchronously after mount (and refreshes across days),
+  // so the initial value above is just a placeholder. Sync the displayed stop
+  // time to the saved plan whenever it arrives, unless the user is mid-edit
+  // (which would clobber their typing). This fixes the stop time appearing to
+  // reset to 6:00 PM on every relaunch.
+  $effect(() => {
+    const s = store.dayplan?.stop_time;
+    // Don't clobber the user's value while they're editing OR while a save is in
+    // flight (the store still holds the stale value until the save propagates).
+    if (s && !editStop && !savingStop) stopTime = s;
+  });
 
   // Tabbed task lists: Today (planned) / Upcoming (future) / Done (completed).
   // A single compact row replaces the old stacked + collapsible sections.
@@ -78,13 +91,14 @@
 
   // Auto-fit the window to the content height so there's no dead space. Re-fits
   // on any content change (card/sections expand, list changes) and each surface
-  // (store.fitTick). Skipped while the editor overlay owns the window size.
+  // (store.fitTick). Skipped while any Overlay is open, since the overlay owns
+  // the window size (it grows the window to fit its content, e.g. the calendar).
   const FRAME_H = 58; // WindowFrame header height
   let contentH = $state(0);
   $effect(() => {
     const h = contentH;
-    store.fitTick; // re-fit when the hub is surfaced
-    if (showEditor || h <= 0) return;
+    store.fitTick; // re-fit when the hub is surfaced / an overlay closes
+    if (store.overlayCount > 0 || h <= 0) return;
     api.fitWindow(Math.round(h + FRAME_H)).catch(() => {});
   });
 
@@ -125,9 +139,9 @@
   const left = $derived(snap?.minutes_left_in_day ?? 0);
   const over = $derived(committed > left && left > 0);
   const trackedToday = $derived(snap?.tracked_today_min ?? 0);
+  const awayToday = $derived(snap?.away_today_min ?? 0);
   const doneCount = $derived(completed.length);
   const totalCount = $derived(store.tasks.length);
-  const bufferMin = $derived(Math.max(0, left - committed));
 
   // Risk colouring for the planned list, so the tasks that need focus stand
   // out (same logic as the break overlay): urgent = red, behind = amber.
@@ -171,15 +185,15 @@
   async function refresh() {
     await Promise.all([refreshSnapshot(), refreshTasks()]);
   }
-  async function openAdd() {
+  // The editor floats as a centered card over the CURRENT window (like the
+  // break-settings and switch-task popovers), so it must not grow the window.
+  function openAdd() {
     editTask = null;
     showEditor = true;
-    try { await api.resizeWindow("editor"); } catch { /* dev */ }
   }
-  async function openEdit(t: Task) {
+  function openEdit(t: Task) {
     editTask = t;
     showEditor = true;
-    try { await api.resizeWindow("editor"); } catch { /* dev */ }
   }
   async function closeEditor() {
     showEditor = false;
@@ -239,8 +253,23 @@
     await refresh();
   }
   async function onStop() {
+    // Both `change` and `blur` fire (and in WebKitGTK the order isn't
+    // guaranteed); this dedupes to a single save per edit session.
+    if (!editStop) return;
     editStop = false;
-    try { await api.setStopTime(stopTime); await refreshSnapshot(); } catch { /* dev */ }
+    const val = stopTime;
+    savingStop = true;
+    // Optimistically sync the local plan FIRST so the sync-effect above reads
+    // the new value while the save is in flight, instead of reverting to 6pm.
+    if (store.dayplan) store.dayplan.stop_time = val;
+    try {
+      await api.setStopTime(val);
+      await refreshSnapshot();
+    } catch (e) {
+      console.error("stop time save failed", e);
+    } finally {
+      savingStop = false;
+    }
   }
   function toggle(id: number) { expanded[id] = !expanded[id]; }
 </script>
@@ -272,7 +301,7 @@
         </div>
         {#if editStop}
           <input type="time" class="field no-drag" style="width:118px; padding:4px 9px; user-select:text;"
-            bind:value={stopTime} onchange={onStop} onblur={() => (editStop = false)} />
+            bind:value={stopTime} onchange={onStop} onblur={onStop} />
         {:else}
           <button class="stop-chip no-drag shrink-0" title="Change stop time" onclick={() => (editStop = true)}>
             <Icon name="sunset" size={13} /> Ends {fmtStop(stopTime)}
@@ -284,13 +313,14 @@
       <div class="flex items-stretch mt-2.5">
         {@render stat(fmtMin(trackedToday), "tracked", "var(--color-accent)")}
         <div class="vrule"></div>
+        {@render stat(fmtMin(awayToday), "away", "#9aa0aa")}
+        <div class="vrule"></div>
         {@render stat(`${doneCount}/${totalCount}`, "done", "var(--color-positive)")}
         <div class="vrule"></div>
-        {#if over}
-          {@render stat(fmtMin(committed - left), "over", "var(--color-warn)")}
-        {:else}
-          {@render stat(fmtMin(bufferMin), "buffer", "var(--color-ink)")}
-        {/if}
+        <!-- Time left until the stop time (e.g. 1pm with a 6pm stop = 5h). Raw
+             clock remaining, NOT net of planned work. Tinted warn when planned
+             work already exceeds the time left (overbooked). -->
+        {@render stat(fmtMin(left), "left", over ? "var(--color-warn)" : "var(--color-ink)")}
       </div>
 
       <!-- Active tracking: merged into the Today card (no shadow), a hairline
@@ -416,9 +446,6 @@
                       <button class="icon-btn no-drag" title="Reschedule" onclick={() => (reschedFor = reschedFor?.id === t.id ? null : t)}>
                         <Icon name="calendar-clock" size={16} />
                       </button>
-                      {#if reschedFor?.id === t.id}
-                        <DatePopover current={t.plan_date} onPick={pickDate} onClose={() => (reschedFor = null)} />
-                      {/if}
                     </div>
                     <button class="icon-btn no-drag" title="Edit" onclick={() => openEdit(t)}>
                       <Icon name="pencil" size={15} />
@@ -475,9 +502,6 @@
                   <button class="icon-btn no-drag" title="Reschedule" onclick={() => (reschedFor = reschedFor?.id === t.id ? null : t)}>
                     <Icon name="calendar-clock" size={16} />
                   </button>
-                  {#if reschedFor?.id === t.id}
-                    <DatePopover current={t.plan_date} onPick={pickDate} onClose={() => (reschedFor = null)} />
-                  {/if}
                 </div>
                 <button class="btn btn-soft no-drag shrink-0" style="padding:6px 11px;" onclick={() => bringToToday(t.id)}>
                   <Icon name="arrow-right" size={13} /> Today
@@ -528,10 +552,17 @@
   <BreakSettingsPopover onClose={() => (showBreakSettings = false)} />
 {/if}
 
+{#if reschedFor}
+  <!-- Rendered at the top level (not inside the task row) so the fixed calendar
+       isn't trapped under the list's stacking context / section labels. -->
+  <Overlay variant="popover" onClose={() => (reschedFor = null)}>
+    <DatePicker current={reschedFor.plan_date} onPick={pickDate} />
+  </Overlay>
+{/if}
+
 {#if switchTo}
   {@const from = active}
-  <button class="catch no-drag" aria-label="Cancel" onclick={() => (switchTo = null)}></button>
-  <div class="switch-pop no-drag">
+  <Overlay variant="popover" maxWidth={300} pad={14} onClose={() => (switchTo = null)}>
     <div class="flex items-center gap-2 mb-1">
       <span class="grid place-items-center shrink-0" style="width:26px;height:26px;border-radius:8px;background:color-mix(in oklab, var(--color-warn) 14%, white);">
         <Icon name="pause" size={14} style="color: var(--color-warn);" />
@@ -550,7 +581,7 @@
         <Icon name="play" size={13} fill /> Pause & start
       </button>
     </div>
-  </div>
+  </Overlay>
 {/if}
 </div>
 
@@ -951,28 +982,5 @@
   .reopen-btn:hover {
     color: var(--color-accent);
     background: color-mix(in oklab, var(--color-accent) 12%, white);
-  }
-  /* Switch-task confirmation: centered card over a transparent click-catcher
-     (no dark scrim), matching DatePopover. */
-  .catch {
-    position: fixed;
-    inset: 0;
-    z-index: 40;
-    background: transparent;
-    cursor: default;
-  }
-  .switch-pop {
-    position: fixed;
-    z-index: 50;
-    left: 50%;
-    top: 50%;
-    transform: translate(-50%, -50%);
-    width: 300px;
-    background: #fff;
-    border: 0.5px solid var(--line-strong);
-    border-radius: var(--radius-lg);
-    box-shadow: 0 16px 40px -10px rgba(0, 0, 0, 0.38);
-    padding: 14px;
-    animation: fade 0.16s ease both;
   }
 </style>

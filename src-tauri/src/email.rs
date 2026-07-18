@@ -1,13 +1,19 @@
-//! Daily summary email via the Brevo transactional API.
+//! Email delivery via the personal-email-worker (Cloudflare Worker in front of
+//! Brevo), plus the daily summary digest.
 //!
 //! Once a day (default 08:00 local, covering the previous full day) the engine
 //! builds the same dashboard aggregation the History window uses, renders it as
 //! a professional HTML digest, and sends it so the user gets an at-a-glance
 //! answer to "where did my time go yesterday?" without opening the app.
 //!
+//! All sending goes through the worker's `POST /v1/email/send` endpoint, which
+//! also powers task reminders (immediate or scheduled up to 72h ahead). The
+//! worker keeps the Brevo key server-side; this app authenticates with its own
+//! bearer key and passes its own sender.
+//!
 //! Secrets live in `app_settings` (the data-dir DB, never the repo). They are
 //! seeded from environment variables on startup, so the app can be launched once
-//! with the Brevo credentials and every later autostart reads them from the DB.
+//! with the credentials and every later autostart reads them from the DB.
 
 use rusqlite::Connection;
 use std::env;
@@ -16,9 +22,13 @@ use std::fmt::Write as _;
 use crate::db;
 use crate::model::{CategoryStat, Dashboard, PauseStat, PlannedActual};
 
-const BREVO_URL: &str = "https://api.brevo.com/v3/smtp/email";
-const DEFAULT_FROM: &str = "easyboard@hamidslab.com";
-const DEFAULT_FROM_NAME: &str = "Easyboard";
+/// Personal email worker (https://github.com/.../personal-email-worker). The
+/// worker URL + client key can be overridden per-install via settings/env; these
+/// are the defaults for this app.
+const DEFAULT_WORKER_URL: &str = "https://email.hamidslab.com";
+const DEFAULT_WORKER_KEY: &str = "achieve-secret-key";
+const DEFAULT_FROM: &str = "notifications@hamidslab.com";
+const DEFAULT_FROM_NAME: &str = "Achieve";
 
 // Palette mirrored from the app so the email reads like the same product.
 const INK: &str = "#1d1d1f";
@@ -28,11 +38,13 @@ const LINE: &str = "#e6e6eb";
 const BG: &str = "#f2f2f5";
 const ACCENT: &str = "#18a89e";
 const UNTRACKED: &str = "#9aa0aa";
+const AWAY: &str = "#b0b4bd";
 
 /// Everything needed to send one email, assembled while holding the DB lock so
 /// the actual HTTP call can happen after the lock is released.
 pub struct Payload {
-    pub api_key: String,
+    pub worker_url: String,
+    pub worker_key: String,
     pub from: String,
     pub from_name: String,
     pub reply_to: String,
@@ -41,10 +53,35 @@ pub struct Payload {
     pub html: String,
 }
 
+/// Worker endpoint (base URL, bearer key) resolved from settings with defaults.
+/// The reminder module reuses this to schedule/cancel sends.
+pub fn worker_creds(conn: &Connection) -> (String, String) {
+    let url = db::setting(conn, "email_worker_url")
+        .filter(|v| !v.trim().is_empty())
+        .unwrap_or_else(|| DEFAULT_WORKER_URL.into());
+    let key = db::setting(conn, "email_worker_key")
+        .filter(|v| !v.trim().is_empty())
+        .unwrap_or_else(|| DEFAULT_WORKER_KEY.into());
+    (url.trim_end_matches('/').to_string(), key)
+}
+
+/// The configured sender/recipient (from, from_name, reply_to, to). Shared by the
+/// digest and reminders so every message reads as the same product. Returns None
+/// if no recipient is configured.
+pub fn identity(conn: &Connection) -> Option<(String, String, String, String)> {
+    let to = db::setting(conn, "email_to").filter(|v| !v.trim().is_empty())?;
+    let from = db::setting(conn, "email_from").unwrap_or_else(|| DEFAULT_FROM.into());
+    let from_name = db::setting(conn, "email_from_name").unwrap_or_else(|| DEFAULT_FROM_NAME.into());
+    let reply_to = db::setting(conn, "email_reply_to").unwrap_or_else(|| from.clone());
+    Some((from, from_name, reply_to, to))
+}
+
 /// Persist Brevo credentials / recipient from env on startup (only when the env
 /// var is present and non-empty), then auto-enable once a key + recipient exist.
 pub fn seed_from_env(conn: &Connection) {
     let pairs = [
+        ("EMAIL_WORKER_URL", "email_worker_url"),
+        ("EMAIL_WORKER_KEY", "email_worker_key"),
         ("BREVO_API_KEY", "brevo_api_key"),
         ("EMAIL_FROM", "email_from"),
         ("EMAIL_FROM_NAME", "email_from_name"),
@@ -67,8 +104,9 @@ pub fn seed_from_env(conn: &Connection) {
     if db::setting(conn, "email_offset").is_none() {
         let _ = db::put_setting(conn, "email_offset", "1");
     }
-    // Turn it on automatically once configured, unless explicitly disabled.
-    let configured = has(conn, "brevo_api_key") && has(conn, "email_to");
+    // Turn it on automatically once configured, unless explicitly disabled. The
+    // worker URL/key have built-in defaults, so a recipient is all that's needed.
+    let configured = has(conn, "email_to");
     if configured && db::setting(conn, "email_enabled").is_none() {
         let _ = db::put_setting(conn, "email_enabled", "1");
     }
@@ -86,7 +124,7 @@ fn is_due(conn: &Connection, ignore_hour: bool) -> bool {
     if db::setting(conn, "email_enabled").as_deref() != Some("1") {
         return false;
     }
-    if !has(conn, "brevo_api_key") || !has(conn, "email_to") {
+    if !has(conn, "email_to") {
         return false;
     }
     if !ignore_hour {
@@ -121,22 +159,15 @@ pub fn build_due_payload(conn: &Connection) -> Option<Payload> {
 /// Build a payload for an arbitrary day offset (0 = today, 1 = yesterday). Used
 /// by both the scheduler and the manual "send now" command.
 pub fn build_payload(conn: &Connection, offset: i64) -> Result<Payload, String> {
-    let api_key = db::setting(conn, "brevo_api_key")
-        .filter(|v| !v.trim().is_empty())
-        .ok_or("no Brevo API key configured")?;
-    let to = db::setting(conn, "email_to")
-        .filter(|v| !v.trim().is_empty())
-        .ok_or("no recipient configured")?;
-    let from = db::setting(conn, "email_from").unwrap_or_else(|| DEFAULT_FROM.into());
-    let from_name = db::setting(conn, "email_from_name").unwrap_or_else(|| DEFAULT_FROM_NAME.into());
-    let reply_to = db::setting(conn, "email_reply_to").unwrap_or_else(|| from.clone());
+    let (from, from_name, reply_to, to) = identity(conn).ok_or("no recipient configured")?;
+    let (worker_url, worker_key) = worker_creds(conn);
 
     let dash = db::dashboard(conn, "day", offset).map_err(|e| e.to_string())?;
     let work = db::work_bounds(conn, &dash.start_date);
     let subject = format!("Your day · {}", pretty_date(&dash.start_date));
     let html = render_html(&dash, work.as_ref());
 
-    Ok(Payload { api_key, from, from_name, reply_to, to, subject, html })
+    Ok(Payload { worker_url, worker_key, from, from_name, reply_to, to, subject, html })
 }
 
 /// Mark that today's summary has been sent, so it won't send again until the
@@ -146,28 +177,109 @@ pub fn mark_sent(conn: &Connection) {
     let _ = db::put_setting(conn, "email_last_sent", &today);
 }
 
-/// POST the payload to Brevo. Blocking; call off the DB lock.
+/// Send the daily digest now via the worker. Blocking; call off the DB lock.
 pub fn send(p: &Payload) -> Result<(), String> {
-    let body = serde_json::json!({
-        "sender": { "name": p.from_name, "email": p.from },
-        "to": [{ "email": p.to }],
-        "replyTo": { "email": p.reply_to },
-        "subject": p.subject,
-        "htmlContent": p.html,
+    worker_send(
+        &p.worker_url,
+        &p.worker_key,
+        &Message {
+            from: &p.from,
+            from_name: &p.from_name,
+            reply_to: &p.reply_to,
+            to: &p.to,
+            subject: &p.subject,
+            html: &p.html,
+            scheduled_at: None,
+        },
+    )
+    .map(|_msg_id| ())
+}
+
+/// One email to hand to the worker. Borrowed so callers assemble it cheaply.
+pub struct Message<'a> {
+    pub from: &'a str,
+    pub from_name: &'a str,
+    pub reply_to: &'a str,
+    pub to: &'a str,
+    pub subject: &'a str,
+    pub html: &'a str,
+    /// ISO 8601 (UTC, ...Z). When set, the worker delivers at that time (<=72h
+    /// ahead). When None, delivery is immediate.
+    pub scheduled_at: Option<&'a str>,
+}
+
+/// POST an email to the worker's `/v1/email/send`. Returns the Brevo messageId
+/// (used to fetch status or cancel a scheduled send). Blocking; call unlocked.
+pub fn worker_send(worker_url: &str, worker_key: &str, m: &Message) -> Result<String, String> {
+    let mut body = serde_json::json!({
+        "sender": { "name": m.from_name, "email": m.from },
+        "to": [{ "email": m.to }],
+        "replyTo": { "email": m.reply_to },
+        "subject": m.subject,
+        "htmlContent": m.html,
     });
-    let resp = ureq::post(BREVO_URL)
-        .set("api-key", &p.api_key)
+    if let Some(at) = m.scheduled_at {
+        body["scheduledAt"] = serde_json::Value::String(at.to_string());
+    }
+    let resp = ureq::post(&format!("{worker_url}/v1/email/send"))
+        .set("authorization", &format!("Bearer {worker_key}"))
         .set("accept", "application/json")
         .set("content-type", "application/json")
         .send_json(body);
     match resp {
-        Ok(_) => Ok(()),
+        Ok(r) => {
+            // Envelope: { success, data: { messageId }, requestId }.
+            let v: serde_json::Value = r.into_json().map_err(|e| e.to_string())?;
+            if v.get("success").and_then(|s| s.as_bool()) != Some(true) {
+                return Err(format!("worker rejected send: {v}"));
+            }
+            Ok(v.get("data")
+                .and_then(|d| d.get("messageId"))
+                .and_then(|id| id.as_str())
+                .unwrap_or_default()
+                .to_string())
+        }
         Err(ureq::Error::Status(code, r)) => {
             let detail = r.into_string().unwrap_or_default();
-            Err(format!("Brevo returned {code}: {detail}"))
+            Err(format!("worker returned {code}: {detail}"))
         }
         Err(e) => Err(e.to_string()),
     }
+}
+
+/// Cancel a scheduled send by its messageId (or a batchId). Best-effort: a 404
+/// (already sent/cancelled) is treated as success. Blocking; call unlocked.
+pub fn worker_cancel(worker_url: &str, worker_key: &str, identifier: &str) -> Result<(), String> {
+    let resp = ureq::delete(&format!(
+        "{worker_url}/v1/email/scheduled/{}",
+        urlencode(identifier)
+    ))
+    .set("authorization", &format!("Bearer {worker_key}"))
+    .set("accept", "application/json")
+    .call();
+    match resp {
+        Ok(_) => Ok(()),
+        // Already gone (delivered or never existed): nothing to cancel.
+        Err(ureq::Error::Status(404 | 400, _)) => Ok(()),
+        Err(ureq::Error::Status(code, r)) => {
+            Err(format!("worker returned {code}: {}", r.into_string().unwrap_or_default()))
+        }
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+/// Minimal percent-encoding for a path segment (message ids contain `<>@.`).
+fn urlencode(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(b as char)
+            }
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
 }
 
 // ---------------------------------------------------------------------------
@@ -197,7 +309,7 @@ fn render_html(d: &Dashboard, work: Option<&(String, String)>) -> String {
         s,
         r#"<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
 <body style="margin:0;padding:0;background:{BG};">
-<div style="display:none;max-height:0;overflow:hidden;opacity:0;">Tracked {tracked_lbl} · Focus {focus_pct}% · Untracked {untr_lbl} · {done}/{total} done</div>
+<div style="display:none;max-height:0;overflow:hidden;opacity:0;">Tracked {tracked_lbl} · Focus {focus_pct}% · Untracked {untr_lbl} · Away {away_lbl} · {done}/{total} done</div>
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:{BG};padding:24px 12px;">
 <tr><td align="center">
 <table role="presentation" width="600" cellpadding="0" cellspacing="0" style="max-width:600px;width:100%;background:#ffffff;border:1px solid {LINE};border-radius:16px;overflow:hidden;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
@@ -216,6 +328,7 @@ fn render_html(d: &Dashboard, work: Option<&(String, String)>) -> String {
         worked = worked,
         tracked_lbl = fmt_min(tracked),
         untr_lbl = fmt_min(untracked),
+        away_lbl = fmt_min(d.away_min),
         focus_pct = focus_pct,
         done = d.completed,
         total = d.total_tasks,
@@ -224,10 +337,11 @@ fn render_html(d: &Dashboard, work: Option<&(String, String)>) -> String {
 
     // KPI row.
     let _ = write!(s, r#"<tr><td style="padding:16px 24px 4px 24px;"><table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>"#);
-    kpi(&mut s, "Tracked", &fmt_min(tracked), ACCENT);
-    kpi(&mut s, "Focus", &format!("{focus_pct}%"), INK);
-    kpi(&mut s, "Untracked", &fmt_min(untracked), UNTRACKED);
-    kpi(&mut s, "Done", &format!("{}/{}", d.completed, d.total_tasks), INK);
+    kpi(&mut s, "Tracked", &fmt_min(tracked), ACCENT, "20%");
+    kpi(&mut s, "Focus", &format!("{focus_pct}%"), INK, "20%");
+    kpi(&mut s, "Untracked", &fmt_min(untracked), UNTRACKED, "20%");
+    kpi(&mut s, "Away", &fmt_min(d.away_min), AWAY, "20%");
+    kpi(&mut s, "Done", &format!("{}/{}", d.completed, d.total_tasks), INK, "20%");
     let _ = write!(s, "</tr></table></td></tr>");
 
     // Categories.
@@ -277,15 +391,16 @@ fn render_html(d: &Dashboard, work: Option<&(String, String)>) -> String {
     s
 }
 
-fn kpi(s: &mut String, label: &str, value: &str, color: &str) {
+fn kpi(s: &mut String, label: &str, value: &str, color: &str, width: &str) {
     let _ = write!(
         s,
-        r#"<td width="25%" style="padding:8px 6px;" valign="top">
-  <div style="background:#f7f7f9;border:1px solid {LINE};border-radius:10px;padding:12px 10px;">
+        r#"<td width="{width}" style="padding:8px 4px;" valign="top">
+  <div style="background:#f7f7f9;border:1px solid {LINE};border-radius:10px;padding:12px 8px;">
     <div style="font-size:10px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:{MUTED};">{label}</div>
-    <div style="font-size:20px;font-weight:700;color:{color};margin-top:4px;line-height:1;">{value}</div>
+    <div style="font-size:19px;font-weight:700;color:{color};margin-top:4px;line-height:1;">{value}</div>
   </div>
 </td>"#,
+        width = width,
         LINE = LINE,
         MUTED = MUTED,
         color = color,

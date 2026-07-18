@@ -39,8 +39,8 @@
 </script>
 
 <main
-  class="glass"
-  style="width:100%; height:100%; border-radius: var(--radius-card);"
+  class={store.view === "break" ? "" : "glass"}
+  style="width:100%; height:100%; {store.view === 'break' ? '' : 'border-radius: var(--radius-card);'}"
 >
   {#if !store.ready}
     <div class="grid place-items-center h-full text-ink-faint text-[13px]">

@@ -5,6 +5,8 @@ import type {
   Dashboard,
   DayPlan,
   FocusSpan,
+  Reminder,
+  ReminderSpec,
   Snapshot,
   Task,
   View,
@@ -106,4 +108,29 @@ export const api = {
   quit: () => invoke<void>("quit_app"),
   // Send the daily summary email now (offset: 0=today, 1=yesterday).
   sendSummaryNow: (offset = 1) => invoke<string>("send_summary_now", { offset }),
+
+  // ---- reminders ----
+  reminders: (taskId: number) =>
+    invoke<Reminder[]>("list_reminders", { taskId }),
+  createReminder: (taskId: number, r: ReminderSpec) =>
+    invoke<number>("create_reminder", {
+      taskId,
+      remindAt: r.remind_at,
+      rrule: r.rrule,
+      until: r.until,
+      count: r.count,
+      channel: r.channel,
+      note: r.note,
+    }),
+  updateReminder: (id: number, r: ReminderSpec) =>
+    invoke<void>("update_reminder", {
+      id,
+      remindAt: r.remind_at,
+      rrule: r.rrule,
+      until: r.until,
+      count: r.count,
+      channel: r.channel,
+      note: r.note,
+    }),
+  deleteReminder: (id: number) => invoke<void>("delete_reminder", { id }),
 };

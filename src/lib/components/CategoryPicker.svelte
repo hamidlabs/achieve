@@ -26,6 +26,7 @@
   let editName = $state("");
   let editColor = $state(palette[0]);
   let busy = $state(false);
+  let cpError = $state<string | null>(null); // inline, non-blocking error
 
   const selected = $derived(categories.find((c) => c.id === categoryId) ?? null);
   const q = $derived(query.trim().toLowerCase());
@@ -67,13 +68,14 @@
     const trimmed = name.trim();
     if (!trimmed || busy) return;
     busy = true;
+    cpError = null;
     try {
       const id = await api.createCategory(trimmed, color);
       await refreshCategories();
       pick(id);
     } catch (e) {
       console.error("[achieve] create category failed:", e);
-      alert("Could not create the category: " + e);
+      cpError = "Couldn't create that category. Try again.";
     } finally {
       busy = false;
     }
@@ -88,13 +90,14 @@
     const name = editName.trim();
     if (!name || editingId == null || busy) return;
     busy = true;
+    cpError = null;
     try {
       await api.updateCategory(editingId, name, editColor);
       await refreshCategories();
       editingId = null;
     } catch (e) {
       console.error("[achieve] rename category failed:", e);
-      alert("Could not update the category: " + e);
+      cpError = "Couldn't rename that category. Try again.";
     } finally {
       busy = false;
     }
@@ -102,13 +105,14 @@
   async function del(c: Category) {
     if (!confirm(`Delete "${c.name}"? Tasks in it are kept and become uncategorized.`)) return;
     busy = true;
+    cpError = null;
     try {
       await api.deleteCategory(c.id);
       await refreshCategories();
       if (categoryId === c.id) categoryId = null;
     } catch (e) {
       console.error("[achieve] delete category failed:", e);
-      alert("Could not delete the category: " + e);
+      cpError = "Couldn't delete that category. Try again.";
     } finally {
       busy = false;
     }
@@ -230,6 +234,7 @@
           {/if}
         </div>
       {/if}
+      {#if cpError}<div class="cp-err" role="alert">{cpError}</div>{/if}
     </div>
   {/if}
 </div>
@@ -253,7 +258,7 @@
   .trigger:hover { border-color: color-mix(in oklab, var(--color-accent) 40%, var(--line-strong)); }
   .trigger.on { border-color: var(--color-accent); }
   .trigger :global(.chev) { margin-left: auto; color: var(--color-ink-ghost); transition: transform 0.15s ease; }
-  .placeholder { color: var(--color-ink-ghost); }
+  .placeholder { color: var(--color-ink-faint); }
   .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .plus {
     display: grid;
@@ -320,6 +325,14 @@
   .create-opt .name { color: var(--color-accent); font-weight: 500; }
   .create-opt :global(.tick) { margin-left: auto; }
   .empty { padding: 12px 10px; font-size: 12px; color: var(--color-ink-faint); text-align: center; }
+  .cp-err {
+    padding: 7px 10px;
+    font-size: 11.5px;
+    font-weight: 500;
+    color: var(--color-danger);
+    background: color-mix(in oklab, var(--color-danger) 9%, transparent);
+    border-top: 0.5px solid var(--line);
+  }
 
   .create { padding: 8px; display: flex; flex-direction: column; gap: 8px; }
   .create-top { display: flex; align-items: center; gap: 8px; }

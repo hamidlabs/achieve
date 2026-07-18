@@ -103,9 +103,9 @@
     <div class="flex flex-col items-center">
       {#if !onBreak}
         <!-- Prompt -->
-        <div class="orb mb-5"><Icon name="moon-star" size={30} /></div>
-        <div class="text-[22px] font-semibold leading-tight" style="color: #f4f6f7;">Time for a break</div>
-        <p class="text-[13.5px] leading-relaxed mt-2 max-w-[320px]" style="color: rgba(255,255,255,0.62);">
+        <div class="orb mb-6"><Icon name="moon-star" size={36} /></div>
+        <div class="text-[28px] font-semibold leading-tight" style="color: #f4f6f7;">Time for a break</div>
+        <p class="text-[15px] leading-relaxed mt-3 max-w-[360px]" style="color: rgba(255,255,255,0.62);">
           You've focused for <span class="font-semibold" style="color: #dfe6e5;">{workedLabel(workedMin)}</span> straight.
           A few minutes away keeps you sharp.
         </p>
@@ -118,14 +118,14 @@
         </div>
       {:else}
         <!-- Countdown -->
-        <ProgressRing value={done ? 1 : ringFrac} size={196} stroke={11} color={TEAL} track="rgba(255,255,255,0.12)">
+        <ProgressRing value={done ? 1 : ringFrac} size={260} stroke={13} color={TEAL} track="rgba(255,255,255,0.1)">
           <div class="flex flex-col items-center leading-none">
             {#if done}
-              <div class="text-[20px] font-semibold" style="color: var(--teal);">Rested</div>
-              <div class="text-[11px] mt-1.5" style="color: rgba(255,255,255,0.5);">ready when you are</div>
+              <div class="text-[26px] font-semibold" style="color: var(--teal);">Rested</div>
+              <div class="text-[12px] mt-2" style="color: rgba(255,255,255,0.5);">ready when you are</div>
             {:else}
-              <div class="tabular-nums font-semibold" style="font-size:46px; letter-spacing:-1px; color:#f4f6f7;">{mmss}</div>
-              <div class="text-[11px] mt-1.5" style="color: rgba(255,255,255,0.5);">look away from the screen</div>
+              <div class="tabular-nums font-semibold" style="font-size:64px; letter-spacing:-1.5px; color:#f4f6f7;">{mmss}</div>
+              <div class="text-[12px] mt-2" style="color: rgba(255,255,255,0.5);">look away from the screen</div>
             {/if}
           </div>
         </ProgressRing>
@@ -175,13 +175,15 @@
 
 <style>
   .break-surface {
+    /* Full-screen dimmed overlay (SafeEyes style): a near-opaque dark wash with
+       only a faint teal glow, so it reads as "step away from the screen". */
     background:
-      radial-gradient(120% 80% at 50% -5%, color-mix(in oklab, var(--teal) 26%, transparent), transparent 55%),
-      linear-gradient(180deg, rgba(14, 17, 21, 0.9), rgba(9, 11, 14, 0.92));
+      radial-gradient(70% 55% at 50% 32%, color-mix(in oklab, var(--teal) 12%, transparent), transparent 60%),
+      linear-gradient(180deg, rgba(12, 14, 18, 0.985), rgba(7, 9, 12, 0.99));
     overflow: hidden;
   }
   .breath {
-    background: radial-gradient(38% 30% at 50% 40%, color-mix(in oklab, var(--teal) 26%, transparent), transparent 70%);
+    background: radial-gradient(30% 24% at 50% 40%, color-mix(in oklab, var(--teal) 18%, transparent), transparent 72%);
     animation: breathe 7s ease-in-out infinite;
   }
   @keyframes breathe {
@@ -189,7 +191,7 @@
     50% { transform: scale(1.14); opacity: 0.75; }
   }
   .orb {
-    width: 78px; height: 78px;
+    width: 96px; height: 96px;
     display: grid; place-items: center;
     border-radius: 999px;
     color: var(--teal);

@@ -16,6 +16,9 @@ export const store = $state({
   cardCollapsed: true,
   // Bumped on each surface so the tasks hub re-fits its height to content.
   fitTick: 0,
+  // How many Overlay dialogs/popovers are open. While > 0 the hub suspends its
+  // list auto-fit (the Overlay owns the window height so its content fits).
+  overlayCount: 0,
 });
 
 const PLACEHOLDER_SNAPSHOT: Snapshot = {
@@ -34,6 +37,7 @@ const PLACEHOLDER_SNAPSHOT: Snapshot = {
   greeting: "Let's make today count",
   planned_today: true,
   worked_since_break_min: 0,
+  away_today_min: 0,
   on_break: false,
   break_remaining_sec: 0,
 };

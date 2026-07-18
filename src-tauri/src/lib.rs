@@ -13,6 +13,7 @@ mod media;
 mod model;
 mod notify;
 mod niri;
+mod reminder;
 mod shutdown;
 mod sound;
 mod window;
@@ -139,6 +140,10 @@ pub fn run() {
             commands::quit_app,
             commands::send_summary_now,
             commands::play_sound,
+            commands::list_reminders,
+            commands::create_reminder,
+            commands::update_reminder,
+            commands::delete_reminder,
         ])
         .run(tauri::generate_context!())
         .expect("error while running achieve");

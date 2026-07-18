@@ -1,12 +1,16 @@
 <script lang="ts">
+  // Notion-style date picker: quick options + a mini month calendar. Pure
+  // presentational (no positioning/overlay); wrap it in <Overlay> to float it.
+  // Reused by the task reschedule flow and the create wizard's "When" step.
   import Icon from "../icons/Icon.svelte";
 
   interface Props {
     onPick: (date: string | null) => void;
-    onClose: () => void;
     current?: string | null;
+    /** Show the "No date" (someday) row. Off for create, where a date is required-ish. */
+    allowNone?: boolean;
   }
-  let { onPick, onClose, current = null }: Props = $props();
+  let { onPick, current = null, allowNone = true }: Props = $props();
 
   // Local YYYY-MM-DD (never UTC, to match the backend's localtime dates).
   function ymd(d: Date): string {
@@ -46,8 +50,9 @@
     { label: "Next week", icon: "calendar", date: () => nextWeek() },
   ];
 
-  // Mini month calendar.
-  let view = $state(new Date(today.getFullYear(), today.getMonth(), 1));
+  // Mini month calendar, opened on the current selection's month when set.
+  const initial = current ? new Date(current + "T00:00:00") : today;
+  let view = $state(new Date(initial.getFullYear(), initial.getMonth(), 1));
   const monthLabel = $derived(
     view.toLocaleDateString(undefined, { month: "long", year: "numeric" }),
   );
@@ -70,81 +75,57 @@
   const W = ["S", "M", "T", "W", "T", "F", "S"];
 </script>
 
-<!-- transparent click-catcher (no dark scrim) -->
-<button class="catch no-drag" aria-label="Close" onclick={onClose}></button>
-
-<div class="pop no-drag">
-  <div class="flex flex-col gap-0.5">
-    {#each quick as q (q.label)}
-      <button class="row" onclick={() => onPick(ymd(q.date()))}>
-        <Icon name={q.icon} size={14} class="text-ink-faint" />
-        <span class="flex-1 text-left">{q.label}</span>
-        <span class="text-[11px] text-ink-ghost">{short(q.date())}</span>
-      </button>
-    {/each}
+<div class="flex flex-col gap-0.5">
+  {#each quick as q (q.label)}
+    <button class="row" onclick={() => onPick(ymd(q.date()))}>
+      <Icon name={q.icon} size={14} class="text-ink-faint" />
+      <span class="flex-1 text-left">{q.label}</span>
+      <span class="text-[11px] text-ink-ghost">{short(q.date())}</span>
+    </button>
+  {/each}
+  {#if allowNone}
     <button class="row" onclick={() => onPick(null)}>
       <Icon name="x" size={14} class="text-ink-faint" />
       <span class="flex-1 text-left">No date</span>
     </button>
+  {/if}
+</div>
+
+<div class="my-2 h-px" style="background: var(--line);"></div>
+
+<div class="px-1">
+  <div class="flex items-center justify-between mb-1.5">
+    <span class="text-[12px] font-medium text-ink">{monthLabel}</span>
+    <div class="flex gap-0.5">
+      <button class="nav" title="Previous month" onclick={() => shiftMonth(-1)}>
+        <Icon name="chevron-right" size={15} class="rotate-180" />
+      </button>
+      <button class="nav" title="Next month" onclick={() => shiftMonth(1)}>
+        <Icon name="chevron-right" size={15} />
+      </button>
+    </div>
   </div>
-
-  <div class="my-2 h-px" style="background: var(--line);"></div>
-
-  <div class="px-1">
-    <div class="flex items-center justify-between mb-1.5">
-      <span class="text-[12px] font-medium text-ink">{monthLabel}</span>
-      <div class="flex gap-0.5">
-        <button class="nav" title="Previous month" onclick={() => shiftMonth(-1)}>
-          <Icon name="chevron-right" size={15} class="rotate-180" />
-        </button>
-        <button class="nav" title="Next month" onclick={() => shiftMonth(1)}>
-          <Icon name="chevron-right" size={15} />
-        </button>
-      </div>
-    </div>
-    <div class="grid grid-cols-7 gap-0.5 mb-0.5">
-      {#each W as w, i (i)}
-        <div class="text-[9.5px] text-ink-ghost text-center font-medium">{w}</div>
-      {/each}
-    </div>
-    <div class="grid grid-cols-7 gap-0.5">
-      {#each cells as d (d.getTime())}
-        <button
-          class="day"
-          class:dim={!inMonth(d)}
-          class:today={isToday(d)}
-          class:sel={isCurrent(d)}
-          onclick={() => onPick(ymd(d))}
-        >
-          {d.getDate()}
-        </button>
-      {/each}
-    </div>
+  <div class="grid grid-cols-7 gap-0.5 mb-0.5">
+    {#each W as w, i (i)}
+      <div class="text-[9.5px] text-ink-ghost text-center font-medium">{w}</div>
+    {/each}
+  </div>
+  <div class="grid grid-cols-7 gap-0.5">
+    {#each cells as d (d.getTime())}
+      <button
+        class="day"
+        class:dim={!inMonth(d)}
+        class:today={isToday(d)}
+        class:sel={isCurrent(d)}
+        onclick={() => onPick(ymd(d))}
+      >
+        {d.getDate()}
+      </button>
+    {/each}
   </div>
 </div>
 
 <style>
-  .catch {
-    position: fixed;
-    inset: 0;
-    z-index: 40;
-    background: transparent;
-    cursor: default;
-  }
-  .pop {
-    position: fixed;
-    z-index: 50;
-    width: 244px;
-    left: 50%;
-    top: 50%;
-    transform: translate(-50%, -50%);
-    background: #fff;
-    border: 0.5px solid var(--line-strong);
-    border-radius: var(--radius-lg);
-    box-shadow: 0 16px 40px -10px rgba(0, 0, 0, 0.38);
-    padding: 8px;
-    animation: fade 0.16s ease both;
-  }
   .row {
     display: flex;
     align-items: center;

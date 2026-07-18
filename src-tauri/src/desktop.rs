@@ -24,6 +24,24 @@ const RULE: &str = r#"window-rule {
     // by the compositor and there's no square transparent margin around it.
     geometry-corner-radius 14
     clip-to-geometry true
+}
+// During a rest break the window renames itself to "Achieve Break" so this rule
+// makes it a borderless, un-rounded, edge-to-edge fullscreen overlay (SafeEyes
+// style). No corner-radius/clip here, so the dimmed backdrop reaches the edges.
+window-rule {
+    match title="^Achieve Break$"
+    open-fullscreen true
+    focus-ring { off; }
+    border { off; }
+    shadow { off; }
+}
+// The second-monitor dimming veil: also borderless + un-rounded, edge-to-edge.
+// It is moved to the other output and fullscreened at runtime.
+window-rule {
+    match title="^Achieve Veil$"
+    focus-ring { off; }
+    border { off; }
+    shadow { off; }
 }"#;
 
 /// Idempotently ensure the niri float rule exists. Best-effort: never panics.

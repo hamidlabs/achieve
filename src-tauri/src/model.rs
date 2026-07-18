@@ -52,10 +52,37 @@ pub struct Snapshot {
     pub planned_today: bool,
     /// Minutes of continuous tracked work since the last break (drives break timing).
     pub worked_since_break_min: i64,
+    /// Minutes spent away from the machine (idle) today: the third presence bucket.
+    pub away_today_min: i64,
     /// True while the active task is the special Break task (you're on a break).
     pub on_break: bool,
     /// Seconds left in the current break (can be <=0 once the break is over).
     pub break_remaining_sec: i64,
+}
+
+/// A task reminder. Times are surfaced to the UI in LOCAL wall-clock (what the
+/// user picked); `remind_at` (UTC) is the source of truth the engine compares
+/// against now(). Recurring reminders advance in place to the next slot.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Reminder {
+    pub id: i64,
+    pub task_id: i64,
+    /// Next fire time as local "YYYY-MM-DD HH:MM" (for display + editing).
+    pub remind_at_local: String,
+    /// Next fire time, UTC "YYYY-MM-DD HH:MM:SS".
+    pub remind_at: String,
+    /// None = one-shot. Else: daily | weekdays | weekly | biweekly | monthly |
+    /// yearly | every:N:days | every:N:weeks | every:N:months.
+    pub rrule: Option<String>,
+    /// Inclusive recurrence end as local "YYYY-MM-DD", if any.
+    pub rrule_until: Option<String>,
+    /// Remaining fires (including the next one); None = unbounded.
+    pub rrule_count: Option<i64>,
+    /// email | notification | both.
+    pub channel: String,
+    pub note: Option<String>,
+    /// pending | scheduled | sent | cancelled | failed.
+    pub status: String,
 }
 
 /// User-tunable rest-break (ultradian) settings.
@@ -140,7 +167,9 @@ pub struct Bar {
     pub label: String,
     pub focus_min: i64,
     pub untracked_min: i64,
-    /// Dominant category (or "Untracked") in this bucket, for the chart tooltip.
+    /// Away (idle, not at the machine) minutes in this bucket.
+    pub away_min: i64,
+    /// Dominant category (or "Untracked"/"Away") in this bucket, for the tooltip.
     pub top: String,
     pub top_color: String,
 }
@@ -153,7 +182,8 @@ pub struct Bar {
 pub struct TimelineSpan {
     pub start_min: i64,
     pub end_min: i64,
-    pub focus: bool,
+    /// "focus" (tracked), "untracked" (active, no task), or "away" (idle).
+    pub kind: String,
     pub label: String,
     pub color: String,
 }
@@ -166,6 +196,8 @@ pub struct Dashboard {
     pub total_tracked_min: i64,
     pub focus_min: i64,
     pub distraction_min: i64,
+    /// Minutes away from the machine (idle) in the window: the third presence bucket.
+    pub away_min: i64,
     pub completed: i64,
     pub total_tasks: i64,
     pub by_category: Vec<CategoryStat>,
