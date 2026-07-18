@@ -140,16 +140,15 @@ fn is_on_break(app: &AppHandle) -> bool {
         .unwrap_or(false)
 }
 
-/// Logical (width, height) for each view.
+/// Logical (width, height) for each view. One fixed, phone-like frame for every
+/// non-break surface: a tall card with a persistent bottom nav, content scrolls
+/// inside. The dashboard used to open wide (880px); it now shares the hub width
+/// so the whole app reads as one consistent mobile surface. Editors/pickers are
+/// in-frame overlays, so they don't need their own window size.
 pub fn size_for(view: &str) -> (f64, f64) {
     match view {
-        "dashboard" => (880.0, 600.0),
-        // Compact task dialog: same width as the hub (no width jump), a touch
-        // taller so the centered card floats over the dimmed list behind it.
-        "editor" => (468.0, 560.0),
         "break" => (440.0, 480.0),
-        // "nudge" = the unified task hub (planning + tracking + tasks + done)
-        _ => (468.0, 672.0),
+        _ => (468.0, 760.0),
     }
 }
 

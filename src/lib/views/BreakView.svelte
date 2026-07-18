@@ -9,7 +9,9 @@
   import { fmtMin, catColor } from "../format";
   import type { BreakSettings } from "../types";
 
-  const TEAL = "#2aa39a";
+  // Calm violet for the rest surface (on-brand with the app accent). The var is
+  // still threaded through as --teal downstream; only the value changed.
+  const TEAL = "#8a7ef2";
   const URGENT = "#ff6b6b";
   const BEHIND = "#f0a437";
 

@@ -9,8 +9,8 @@ export type TaskStatus =
   | "completed"
   | "reopened";
 
-// Only two surfaces remain: the unified task hub ("nudge") and the dashboard.
-export type View = "nudge" | "dashboard" | "break";
+// Surfaces: the task hub ("nudge"), the dashboard, the notes journal, and break.
+export type View = "nudge" | "dashboard" | "notes" | "break";
 
 export interface Category {
   id: number;
@@ -97,6 +97,21 @@ export interface ReminderSpec {
   count: number | null;
   channel: ReminderChannel;
   note: string | null;
+}
+
+/** A free-form markdown note attached to a task (a dated, searchable journal). */
+export interface Note {
+  id: number;
+  task_id: number;
+  task_title: string;
+  category_color: string | null;
+  body_md: string;
+  /** Created time, local "YYYY-MM-DD HH:MM". */
+  created_local: string;
+  /** Last-edited time, local "YYYY-MM-DD HH:MM". */
+  updated_local: string;
+  /** Created time, UTC (stable sort key). */
+  created_at: string;
 }
 
 export interface BreakSettings {

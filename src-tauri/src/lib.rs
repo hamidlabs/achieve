@@ -144,6 +144,11 @@ pub fn run() {
             commands::create_reminder,
             commands::update_reminder,
             commands::delete_reminder,
+            commands::list_notes,
+            commands::search_notes,
+            commands::create_note,
+            commands::update_note,
+            commands::delete_note,
         ])
         .run(tauri::generate_context!())
         .expect("error while running achieve");

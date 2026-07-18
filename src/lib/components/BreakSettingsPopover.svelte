@@ -83,19 +83,19 @@
 
 <style>
   .orb {
-    width: 24px; height: 24px; display: grid; place-items: center; border-radius: 999px;
-    color: #2aa39a; background: color-mix(in oklab, #2aa39a 12%, white);
+    width: 28px; height: 28px; display: grid; place-items: center; border-radius: 999px;
+    color: var(--color-accent); background: var(--violet-50);
   }
   .srow {
     width: 100%; display: flex; align-items: center; gap: 10px;
-    padding: 6px 4px; border-radius: 8px; transition: background 0.12s ease;
+    padding: 7px 4px; border-radius: var(--radius-sm); transition: background 0.12s ease;
   }
-  .srow:hover { background: rgba(0, 0, 0, 0.03); }
+  .srow:hover { background: var(--violet-50); }
   .switch {
     width: 38px; height: 22px; border-radius: 999px; flex-shrink: 0;
-    background: rgba(0, 0, 0, 0.14); position: relative; transition: background 0.16s ease;
+    background: rgba(28, 27, 42, 0.16); position: relative; transition: background 0.16s ease;
   }
-  .switch.on { background: #2aa39a; }
+  .switch.on { background: var(--color-accent); }
   .knob {
     position: absolute; top: 2px; left: 2px; width: 18px; height: 18px; border-radius: 999px;
     background: #fff; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25); transition: transform 0.16s ease;
@@ -103,16 +103,17 @@
   .switch.on .knob { transform: translateX(16px); }
   .disabled { opacity: 0.4; pointer-events: none; }
   .stp {
-    width: 24px; height: 24px; display: grid; place-items: center; border-radius: 6px;
-    color: var(--color-ink-soft); background: rgba(0, 0, 0, 0.04);
-    border: 0.5px solid var(--line); transition: background 0.12s ease;
+    width: 28px; height: 28px; display: grid; place-items: center; border-radius: var(--radius-sm);
+    color: var(--color-ink-soft); background: #fff;
+    border: 0.5px solid var(--line-strong); transition: all 0.12s ease;
   }
-  .stp:hover { background: rgba(0, 0, 0, 0.08); color: var(--color-ink); }
+  .stp:hover { background: var(--violet-50); border-color: color-mix(in oklab, var(--color-accent) 30%, transparent); color: var(--color-accent); }
   .done {
-    width: 100%; margin-top: 10px; padding: 7px; border-radius: 8px;
+    width: 100%; margin-top: 12px; padding: 9px; border-radius: var(--radius-md);
     font-size: 13px; font-weight: 600; color: white;
-    background: linear-gradient(180deg, #2bbcb1, var(--color-accent));
-    box-shadow: inset 0 0.5px 0 rgba(255, 255, 255, 0.45), 0 1px 1.5px rgba(0, 0, 0, 0.18);
+    background: var(--color-accent);
+    box-shadow: inset 0 0.5px 0 rgba(255, 255, 255, 0.28), 0 4px 12px -5px rgba(92, 79, 214, 0.55);
+    transition: background 0.14s ease;
   }
-  .done:hover { filter: brightness(1.04); }
+  .done:hover { background: var(--color-accent-strong); }
 </style>

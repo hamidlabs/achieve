@@ -126,6 +126,20 @@ fn migrate(conn: &Connection) -> Result<()> {
         );
         CREATE INDEX IF NOT EXISTS idx_reminders_task ON reminders(task_id);
         CREATE INDEX IF NOT EXISTS idx_reminders_due ON reminders(status, remind_at);
+
+        -- Free-form notes attached to a task. Each note is an independent,
+        -- separately-editable markdown entry stamped with when it was written, so
+        -- a task accrues a dated journal you can add to at any moment and search
+        -- back through later. created_at/updated_at are UTC like every timestamp.
+        CREATE TABLE IF NOT EXISTS notes (
+            id         INTEGER PRIMARY KEY,
+            task_id    INTEGER NOT NULL REFERENCES tasks(id),
+            body_md    TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_notes_task ON notes(task_id);
+        CREATE INDEX IF NOT EXISTS idx_notes_created ON notes(created_at);
         "#,
     )?;
 
@@ -1073,6 +1087,96 @@ pub fn update_reminder(
           WHERE id=?8",
         params![remind_at, rrule, until_utc, count, channel, note, now(), id],
     )?;
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Notes (per-task journal + global history/search)
+// ---------------------------------------------------------------------------
+
+const NOTE_COLS: &str = "notes.id, notes.task_id, tasks.title AS task_title,
+     categories.color AS category_color, notes.body_md,
+     strftime('%Y-%m-%d %H:%M', notes.created_at, 'localtime') AS created_local,
+     strftime('%Y-%m-%d %H:%M', notes.updated_at, 'localtime') AS updated_local,
+     notes.created_at";
+
+fn note_from_row(r: &rusqlite::Row) -> rusqlite::Result<crate::model::Note> {
+    Ok(crate::model::Note {
+        id: r.get(0)?,
+        task_id: r.get(1)?,
+        task_title: r.get(2)?,
+        category_color: r.get(3)?,
+        body_md: r.get(4)?,
+        created_local: r.get(5)?,
+        updated_local: r.get(6)?,
+        created_at: r.get(7)?,
+    })
+}
+
+/// All notes for one task, newest first.
+pub fn list_notes(conn: &Connection, task_id: i64) -> Result<Vec<crate::model::Note>> {
+    let sql = format!(
+        "SELECT {NOTE_COLS} FROM notes
+           JOIN tasks ON tasks.id = notes.task_id
+           LEFT JOIN categories ON categories.id = tasks.category_id
+          WHERE notes.task_id = ?1
+          ORDER BY notes.created_at DESC"
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map(params![task_id], note_from_row)?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
+/// Search notes across every task by note text OR task title. Empty query
+/// returns the most recent notes (the default history view). Newest first.
+pub fn search_notes(conn: &Connection, query: &str, limit: i64) -> Result<Vec<crate::model::Note>> {
+    let q = query.trim();
+    let lim = limit.clamp(1, 500);
+    if q.is_empty() {
+        let sql = format!(
+            "SELECT {NOTE_COLS} FROM notes
+               JOIN tasks ON tasks.id = notes.task_id
+               LEFT JOIN categories ON categories.id = tasks.category_id
+              ORDER BY notes.created_at DESC LIMIT ?1"
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map(params![lim], note_from_row)?;
+        return Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?);
+    }
+    let like = format!("%{}%", q.replace('%', "\\%").replace('_', "\\_"));
+    let sql = format!(
+        "SELECT {NOTE_COLS} FROM notes
+           JOIN tasks ON tasks.id = notes.task_id
+           LEFT JOIN categories ON categories.id = tasks.category_id
+          WHERE notes.body_md LIKE ?1 ESCAPE '\\' OR tasks.title LIKE ?1 ESCAPE '\\'
+          ORDER BY notes.created_at DESC LIMIT ?2"
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map(params![like, lim], note_from_row)?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
+/// Add a note to a task; returns the new note id.
+pub fn create_note(conn: &Connection, task_id: i64, body_md: &str) -> Result<i64> {
+    conn.execute(
+        "INSERT INTO notes (task_id, body_md, created_at, updated_at) VALUES (?1, ?2, ?3, ?3)",
+        params![task_id, body_md, now()],
+    )?;
+    Ok(conn.last_insert_rowid())
+}
+
+/// Edit a note's body.
+pub fn update_note(conn: &Connection, id: i64, body_md: &str) -> Result<()> {
+    conn.execute(
+        "UPDATE notes SET body_md=?1, updated_at=?2 WHERE id=?3",
+        params![body_md, now(), id],
+    )?;
+    Ok(())
+}
+
+/// Delete a note.
+pub fn delete_note(conn: &Connection, id: i64) -> Result<()> {
+    conn.execute("DELETE FROM notes WHERE id=?1", params![id])?;
     Ok(())
 }
 

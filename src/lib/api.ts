@@ -5,6 +5,7 @@ import type {
   Dashboard,
   DayPlan,
   FocusSpan,
+  Note,
   Reminder,
   ReminderSpec,
   Snapshot,
@@ -133,4 +134,14 @@ export const api = {
       note: r.note,
     }),
   deleteReminder: (id: number) => invoke<void>("delete_reminder", { id }),
+
+  // ---- notes (per-task journal + global history/search) ----
+  notes: (taskId: number) => invoke<Note[]>("list_notes", { taskId }),
+  searchNotes: (query: string, limit = 200) =>
+    invoke<Note[]>("search_notes", { query, limit }),
+  createNote: (taskId: number, bodyMd: string) =>
+    invoke<number>("create_note", { taskId, bodyMd }),
+  updateNote: (id: number, bodyMd: string) =>
+    invoke<void>("update_note", { id, bodyMd }),
+  deleteNote: (id: number) => invoke<void>("delete_note", { id }),
 };

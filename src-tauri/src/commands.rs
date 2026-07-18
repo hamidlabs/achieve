@@ -3,7 +3,7 @@
 use tauri::{AppHandle, Manager, State};
 
 use crate::db;
-use crate::model::{BreakSettings, Category, Dashboard, DayPlan, FocusSpan, Reminder, Snapshot, Task};
+use crate::model::{BreakSettings, Category, Dashboard, DayPlan, FocusSpan, Note, Reminder, Snapshot, Task};
 use crate::window;
 use crate::AppState;
 
@@ -371,4 +371,36 @@ pub fn delete_reminder(state: State<'_, AppState>, id: i64) -> CmdResult<()> {
     }
     let c = state.db.lock().map_err(err)?;
     db::cancel_reminder(&c, id).map_err(err)
+}
+
+// ---- notes (per-task journal + global history/search) ----
+
+/// All notes for one task, newest first.
+#[tauri::command]
+pub fn list_notes(state: State<'_, AppState>, task_id: i64) -> CmdResult<Vec<Note>> {
+    with_db!(state, c => db::list_notes(&c, task_id))
+}
+
+/// Search notes across all tasks (empty query = recent history). Newest first.
+#[tauri::command]
+pub fn search_notes(state: State<'_, AppState>, query: String, limit: Option<i64>) -> CmdResult<Vec<Note>> {
+    with_db!(state, c => db::search_notes(&c, &query, limit.unwrap_or(200)))
+}
+
+/// Add a note to a task; returns the new note id.
+#[tauri::command]
+pub fn create_note(state: State<'_, AppState>, task_id: i64, body_md: String) -> CmdResult<i64> {
+    with_db!(state, c => db::create_note(&c, task_id, &body_md))
+}
+
+/// Edit a note's markdown body.
+#[tauri::command]
+pub fn update_note(state: State<'_, AppState>, id: i64, body_md: String) -> CmdResult<()> {
+    with_db!(state, c => db::update_note(&c, id, &body_md))
+}
+
+/// Delete a note.
+#[tauri::command]
+pub fn delete_note(state: State<'_, AppState>, id: i64) -> CmdResult<()> {
+    with_db!(state, c => db::delete_note(&c, id))
 }
