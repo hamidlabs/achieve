@@ -5,6 +5,7 @@
   import Overlay from "../ui/Overlay.svelte";
   import DatePicker from "../ui/DatePicker.svelte";
   import ReminderEditor from "./ReminderEditor.svelte";
+  import TaskNotes from "./TaskNotes.svelte";
   import { api } from "../api";
   import CategoryPicker from "./CategoryPicker.svelte";
   import type { Category, Reminder, ReminderSpec, Task } from "../types";
@@ -38,7 +39,6 @@
   let daily = $state(task?.recurrence === "daily");
   let planDate = $state<string | null>(task?.plan_date ?? todayYmd);
   let saving = $state(false);
-  let showDetails = $state(!!task?.body_md?.trim());
   let showDate = $state(false); // edit-mode: reveal the calendar inline
 
   // Reminders. For an existing task they load from the backend and persist
@@ -227,44 +227,46 @@
   }
 </script>
 
-<Overlay variant="dialog" {onClose}>
+<Overlay variant="sheet" maxWidth={404} {onClose}>
   {#if isEdit}
     <!-- ============ EDIT: everything at once ============ -->
     <div class="head">
-      <span class="head-ico"><Icon name="pencil" size={14} style="color: var(--color-accent);" /></span>
+      <span class="head-ico"><Icon name="pencil" size={15} /></span>
       <span class="head-title">Edit task</span>
-      <button class="icon-btn ml-auto" onclick={onClose}><Icon name="x" size={16} /></button>
+      <button class="hbtn ml-auto" onclick={onClose} aria-label="Close"><Icon name="x" size={17} /></button>
     </div>
-    <div class="body scroll flex flex-col gap-3">
-      <input class="field text-[14px] font-medium" style="user-select:text;"
+    <div class="body scroll flex flex-col gap-3.5">
+      <input class="field field-lg" style="user-select:text;"
         placeholder="What needs doing?" bind:value={title}
         onkeydown={(e) => e.key === "Enter" && (e.metaKey || e.ctrlKey) && save()} />
-      {@render categorySection()}
+      {@render labeled("Category", categorySection)}
       {@render whenSection()}
-      {@render timeSection()}
+      {@render labeled("Estimate & repeat", timeSection)}
       {@render remindersSection()}
       {@render detailsSection()}
+      {#if task}<TaskNotes taskId={task.id} />{/if}
     </div>
     {#if saveError}<div class="err-line" role="alert">{saveError}</div>{/if}
     <div class="foot">
-      <button class="btn btn-danger-ghost" onclick={remove}><Icon name="trash" size={15} /> Delete</button>
-      <div class="flex-1"></div>
-      <button class="btn btn-soft" onclick={onClose}>Cancel</button>
-      <button class="btn btn-primary" onclick={save} disabled={!title.trim()}>
-        <Icon name="check" size={15} /> Save
+      <button class="btn btn-danger-ghost" onclick={remove} aria-label="Delete task"><Icon name="trash" size={15} /></button>
+      <button class="btn btn-soft flex-1" onclick={onClose}>Cancel</button>
+      <button class="btn btn-primary flex-[2]" onclick={save} disabled={!title.trim()}>
+        <Icon name="check" size={15} /> Save changes
       </button>
     </div>
   {:else}
     <!-- ============ CREATE: guided wizard ============ -->
     <div class="head">
       {#if step > 0}
-        <button class="icon-btn" title="Back" onclick={back}><Icon name="chevron-right" size={16} class="rotate-180" /></button>
+        <button class="hbtn" title="Back" onclick={back} aria-label="Back"><Icon name="chevron-right" size={18} class="rotate-180" /></button>
       {:else}
-        <span class="head-ico"><Icon name="plus" size={14} style="color: var(--color-accent);" /></span>
+        <span class="head-ico"><Icon name="sparkles" size={15} /></span>
       {/if}
-      <span class="head-title">New task</span>
-      <span class="step-count">{step + 1} of {STEPS.length}</span>
-      <button class="icon-btn" onclick={onClose}><Icon name="x" size={16} /></button>
+      <div class="head-titles">
+        <span class="head-title">New task</span>
+        <span class="head-sub">{STEPS[step]} · step {step + 1} of {STEPS.length}</span>
+      </div>
+      <button class="hbtn" onclick={onClose} aria-label="Close"><Icon name="x" size={17} /></button>
     </div>
     <div class="stepper">
       {#each STEPS as s, i (s)}
@@ -274,7 +276,7 @@
 
     <div class="body wizard">
       {#key step}
-        <div class="step" in:fly={{ x: dir * 18, duration: 170 }}>
+        <div class="step" in:fly={{ x: dir * 20, duration: 190, opacity: 0 }}>
           {#if step === 0}
             <div class="q">What needs doing?</div>
             <input class="field field-lg" style="user-select:text;" placeholder="e.g. Draft the proposal"
@@ -283,9 +285,10 @@
             <p class="hint">Give it a clear, single action. Press Enter to continue.</p>
           {:else if step === 1}
             <div class="q">Choose a category</div>
+            <p class="hint -mt-1">Group it so time adds up the way you think.</p>
             {@render categorySection()}
           {:else if step === 2}
-            <div class="q">When do you want to do this?</div>
+            <div class="q">When will you do it?</div>
             <DatePicker current={planDate} onPick={onDatePicked} allowNone={false} />
           {:else}
             <div class="q">How long will it take?</div>
@@ -300,12 +303,11 @@
     {#if saveError}<div class="err-line" role="alert">{saveError}</div>{/if}
     <div class="foot">
       {#if step === 1}
-        <button class="btn btn-ghost" onclick={() => { categoryId = null; next(); }}>Skip</button>
+        <button class="btn btn-soft" onclick={() => { categoryId = null; next(); }}>Skip</button>
       {/if}
-      <div class="flex-1"></div>
-      <button class="btn btn-primary" onclick={next} disabled={!canNext}>
+      <button class="btn btn-primary flex-1" onclick={next} disabled={!canNext}>
         {#if step < STEPS.length - 1}
-          Next <Icon name="chevron-right" size={15} />
+          Continue <Icon name="chevron-right" size={15} />
         {:else}
           <Icon name="check" size={15} /> Create task
         {/if}
@@ -315,6 +317,13 @@
 </Overlay>
 
 <!-- ===================== shared sections ===================== -->
+
+{#snippet labeled(label: string, section: import("svelte").Snippet)}
+  <div class="fieldset">
+    <div class="fieldset-label">{label}</div>
+    {@render section()}
+  </div>
+{/snippet}
 
 {#snippet categorySection()}
   <CategoryPicker bind:categoryId {categories} onPicked={onCatPicked} />
@@ -338,36 +347,29 @@
 
 {#snippet timeSection()}
   <div class="flex flex-col gap-3">
-    <div>
-      <div class="flex flex-wrap gap-1.5 items-center">
-        {#each presets as p (p)}
-          <button class="chip transition" style={estimate === p ? "background: var(--color-accent); color: white;" : ""} onclick={() => (estimate = p)}>
-            {fmtPreset(p)}
-          </button>
-        {/each}
-        <input type="number" class="field no-drag" style="width:74px; padding:4px 8px; user-select:text;" placeholder="min" bind:value={estimate} />
-      </div>
+    <div class="presets">
+      {#each presets as p (p)}
+        <button class="preset" class:on={estimate === p} onclick={() => (estimate = p)}>
+          {fmtPreset(p)}
+        </button>
+      {/each}
+      <input type="number" class="preset-custom no-drag" style="user-select:text;" placeholder="min" bind:value={estimate} aria-label="Custom minutes" />
     </div>
-    <button class="flex items-center gap-2.5 text-left" onclick={() => (daily = !daily)}>
-      <span class="w-9 h-5 rounded-full transition relative shrink-0"
-        style={daily ? "background: var(--color-accent);" : "background: color-mix(in oklab, var(--color-ink) 18%, transparent);"}>
-        <span class="absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all" style={daily ? "left: 18px;" : "left: 2px;"}></span>
-      </span>
-      <span class="text-[12.5px] text-ink flex items-center gap-1.5"><Icon name="repeat" size={14} /> Repeat daily</span>
+    <button class="toggle-row no-drag" onclick={() => (daily = !daily)} aria-pressed={daily}>
+      <span class="toggle-ico"><Icon name="repeat" size={14} /></span>
+      <div class="text-left flex-1">
+        <div class="text-[12.5px] font-medium text-ink">Repeat daily</div>
+        <div class="text-[10.5px] text-ink-faint">A fresh copy shows up each day</div>
+      </div>
+      <span class="switch" class:on={daily}><span class="knob"></span></span>
     </button>
   </div>
 {/snippet}
 
 {#snippet detailsSection()}
-  <div>
-    {#if showDetails}
-      <div class="text-[11px] font-medium text-ink-faint mb-1.5">Details</div>
-      <MarkdownEditor bind:value={body} rows={3} />
-    {:else}
-      <button class="link-btn" onclick={() => (showDetails = true)}>
-        <Icon name="plus" size={12} /> Add details
-      </button>
-    {/if}
+  <div class="fieldset">
+    <div class="fieldset-label">Details</div>
+    <MarkdownEditor bind:value={body} rows={4} />
   </div>
 {/snippet}
 
@@ -418,49 +420,81 @@
   .head {
     display: flex;
     align-items: center;
-    gap: 8px;
-    padding: 10px 12px;
+    gap: 10px;
+    padding: 13px 14px;
     border-bottom: 0.5px solid var(--line);
     flex-shrink: 0;
   }
   .head-ico {
     display: grid;
     place-items: center;
-    width: 24px;
-    height: 24px;
-    border-radius: 7px;
-    background: color-mix(in oklab, var(--color-accent) 13%, white);
+    width: 30px;
+    height: 30px;
+    border-radius: 10px;
+    color: #fff;
+    background: linear-gradient(150deg, var(--color-accent-bright), var(--color-accent-strong));
+    box-shadow: 0 3px 10px -4px rgba(92, 79, 214, 0.55);
+    flex-shrink: 0;
+  }
+  .head-titles {
+    display: flex;
+    flex-direction: column;
+    line-height: 1.15;
   }
   .head-title {
-    font-size: 13px;
-    font-weight: 600;
+    font-size: 14.5px;
+    font-weight: 700;
     color: var(--color-ink);
   }
-  .step-count {
-    margin-left: auto;
-    font-size: 10.5px;
-    font-weight: 600;
-    color: var(--color-ink-ghost);
+  .head-sub {
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--color-ink-faint);
     font-variant-numeric: tabular-nums;
   }
+  /* icon button tuned for the sheet header */
+  .hbtn {
+    display: grid;
+    place-items: center;
+    width: 32px;
+    height: 32px;
+    border-radius: var(--radius-md);
+    color: var(--color-ink-faint);
+    transition: color 0.12s ease, background 0.12s ease;
+    flex-shrink: 0;
+  }
+  .hbtn:hover { color: var(--color-accent); background: var(--violet-50); }
   .stepper {
     display: flex;
-    gap: 4px;
-    padding: 8px 12px 0;
+    gap: 5px;
+    padding: 12px 14px 2px;
     flex-shrink: 0;
   }
   .seg {
     flex: 1;
-    height: 3px;
+    height: 3.5px;
     border-radius: 999px;
-    background: color-mix(in oklab, var(--color-ink) 10%, transparent);
+    background: color-mix(in oklab, var(--color-ink) 9%, transparent);
     transition: background 0.25s ease;
   }
   .seg.on {
     background: var(--color-accent);
   }
+  /* labelled field group (edit view) */
+  .fieldset {
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+  }
+  .fieldset-label {
+    font-size: 10.5px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--color-ink-faint);
+  }
   .body {
-    padding: 12px;
+    padding: 14px;
     flex: 1;
     min-height: 0;
   }
@@ -492,11 +526,81 @@
     font-size: 11.5px;
     color: var(--color-ink-faint);
   }
+  /* estimate presets */
+  .presets {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 7px;
+    align-items: center;
+  }
+  .preset {
+    min-width: 44px;
+    padding: 7px 12px;
+    border-radius: var(--radius-pill);
+    font-size: 12.5px;
+    font-weight: 600;
+    color: var(--color-ink-soft);
+    background: #fff;
+    border: 0.5px solid var(--line-strong);
+    transition: all 0.12s ease;
+  }
+  .preset:hover { border-color: color-mix(in oklab, var(--color-accent) 40%, var(--line-strong)); color: var(--color-ink); }
+  .preset.on {
+    color: #fff;
+    background: var(--color-accent);
+    border-color: transparent;
+    box-shadow: 0 3px 10px -5px rgba(92, 79, 214, 0.6);
+  }
+  .preset-custom {
+    width: 72px;
+    padding: 7px 10px;
+    font-size: 12.5px;
+    color: var(--color-ink);
+    background: #fff;
+    border: 0.5px solid var(--line-strong);
+    border-radius: var(--radius-pill);
+    outline: none;
+    text-align: center;
+  }
+  .preset-custom:focus { border-color: var(--color-accent); box-shadow: 0 0 0 3px color-mix(in oklab, var(--color-accent) 20%, transparent); }
+  /* repeat toggle row */
+  .toggle-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    padding: 9px 11px;
+    border-radius: var(--radius-md);
+    border: 0.5px solid var(--line);
+    background: var(--card-2);
+    transition: border-color 0.12s ease;
+  }
+  .toggle-row:hover { border-color: var(--line-strong); }
+  .toggle-ico {
+    display: grid;
+    place-items: center;
+    width: 28px;
+    height: 28px;
+    border-radius: 8px;
+    color: var(--color-accent);
+    background: var(--violet-50);
+    flex-shrink: 0;
+  }
+  .switch {
+    width: 38px; height: 22px; border-radius: 999px; flex-shrink: 0;
+    background: rgba(28, 27, 42, 0.16); position: relative; transition: background 0.16s ease;
+  }
+  .switch.on { background: var(--color-accent); }
+  .knob {
+    position: absolute; top: 2px; left: 2px; width: 18px; height: 18px; border-radius: 999px;
+    background: #fff; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25); transition: transform 0.16s ease;
+  }
+  .switch.on .knob { transform: translateX(16px); }
   .foot {
     display: flex;
     align-items: center;
     gap: 8px;
-    padding: 10px 12px;
+    padding: 12px 14px;
     border-top: 0.5px solid var(--line);
     flex-shrink: 0;
   }

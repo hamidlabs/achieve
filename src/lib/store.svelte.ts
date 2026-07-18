@@ -14,12 +14,25 @@ export const store = $state({
   backendOk: true,
   // Today card collapsed (chart hidden) vs expanded.
   cardCollapsed: true,
-  // Bumped on each surface so the tasks hub re-fits its height to content.
+  // Bumped on each surface so a surfaced view can re-run mount-time effects.
   fitTick: 0,
-  // How many Overlay dialogs/popovers are open. While > 0 the hub suspends its
-  // list auto-fit (the Overlay owns the window height so its content fits).
+  // How many Overlay dialogs/popovers are open (used to suppress duplicate
+  // window chrome / keep the shell calm while a modal owns the screen).
   overlayCount: 0,
+  // ---- app-level modals, driven by the bottom nav from any view ----
+  // The task editor: null = closed; { task } = open (task null ⇒ add new).
+  editor: null as { task: Task | null } | null,
+  // Break/rest settings popover.
+  settingsOpen: false,
 });
+
+/** Open the shared task editor (task = null ⇒ create a new task). */
+export function openTaskEditor(task: Task | null = null) {
+  store.editor = { task };
+}
+export function closeTaskEditor() {
+  store.editor = null;
+}
 
 const PLACEHOLDER_SNAPSHOT: Snapshot = {
   pending: 3,
@@ -91,12 +104,10 @@ export async function refreshCategories() {
   }
 }
 
-/** Navigate the adaptive window to a view (resizes via the backend). */
-export async function go(view: View) {
+/** Switch the visible surface. Every non-break view shares one fixed window
+ *  frame, so this is a purely local change: no backend resize/recenter (that
+ *  would animate the whole window via niri and read as jank). The frontend
+ *  handles the smooth view-to-view transition. */
+export function go(view: View) {
   store.view = view;
-  try {
-    await api.setView(view);
-  } catch {
-    /* dev/standalone: just switch the view locally */
-  }
 }

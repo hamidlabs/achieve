@@ -6,7 +6,9 @@
   import { listen } from "@tauri-apps/api/event";
   import type { Snapshot } from "../types";
 
-  const TEAL = "#2aa39a";
+  // Calm violet glow for the rest surface (on-brand with the app accent, but
+  // soft against the near-black dim). The var is still named --teal downstream.
+  const TEAL = "#8a7ef2";
 
   let remaining = $state(0); // seconds left in the break
   let onBreak = $state(false);

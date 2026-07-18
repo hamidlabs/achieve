@@ -1,9 +1,13 @@
 <script lang="ts">
-  // Inline reminder editor (no nested overlay, so the dialog's auto-fit sizing
-  // stays correct). Emits a ReminderSpec; the parent persists it now (existing
-  // task) or defers it until the new task is created.
+  // Inline reminder editor. Emits a ReminderSpec; the parent persists it now
+  // (existing task) or defers it until the new task is created. All controls are
+  // on-brand custom pickers (calendar, time, select) — no native date/time/select.
   import { slide } from "svelte/transition";
   import Icon from "../icons/Icon.svelte";
+  import DatePicker from "../ui/DatePicker.svelte";
+  import TimePicker from "../ui/TimePicker.svelte";
+  import Select from "../ui/Select.svelte";
+  import { fmtDay, fmtTime } from "../reminders";
   import type { Reminder, ReminderChannel, ReminderSpec } from "../types";
 
   interface Props {
@@ -24,7 +28,6 @@
     return ymd(d);
   })();
 
-  // Parse an existing reminder, else sensible defaults (tomorrow 9am).
   const initDate = existing ? existing.remind_at_local.split(" ")[0] : tomorrow;
   const initTime = existing ? existing.remind_at_local.split(" ")[1] : "09:00";
 
@@ -43,7 +46,6 @@
   }
   const initRepeat = parseRepeat(existing?.rrule ?? null);
 
-  // End condition.
   type EndMode = "never" | "on" | "after";
   const initEnd: EndMode = existing?.rrule_until ? "on" : existing?.rrule_count != null ? "after" : "never";
 
@@ -54,10 +56,12 @@
   let customUnit = $state<CustomUnit>(initRepeat.unit);
   let endMode = $state<EndMode>(initEnd);
   let endDate = $state(existing?.rrule_until ?? "");
-  // Backend stores "fires after the first"; show total occurrences.
   let occurrences = $state((existing?.rrule_count ?? 4) + 1);
   let channel = $state<ReminderChannel>(existing?.channel ?? "both");
   let note = $state(existing?.note ?? "");
+
+  let showCal = $state(false);
+  let showEndCal = $state(false);
 
   const repeats = $derived(mode !== "none");
 
@@ -67,11 +71,19 @@
     return mode;
   }
 
-  // Client-side "this is in the past" hint for a one-shot.
   const isPast = $derived.by(() => {
     const dt = new Date(`${date}T${time || "00:00"}:00`);
     return !repeats && dt.getTime() < Date.now();
   });
+
+  function pickDate(d: string | null) {
+    if (d) date = d;
+    showCal = false;
+  }
+  function pickEnd(d: string | null) {
+    endDate = d ?? "";
+    showEndCal = false;
+  }
 
   function submit() {
     if (!date || !time) return;
@@ -86,15 +98,20 @@
     onSave(spec);
   }
 
-  const REPEATS: { v: RepeatMode; label: string }[] = [
-    { v: "none", label: "Does not repeat" },
-    { v: "daily", label: "Every day" },
-    { v: "weekdays", label: "Every weekday (Mon–Fri)" },
-    { v: "weekly", label: "Every week" },
-    { v: "biweekly", label: "Every 2 weeks" },
-    { v: "monthly", label: "Every month" },
-    { v: "yearly", label: "Every year" },
-    { v: "custom", label: "Custom…" },
+  const REPEATS: { value: string; label: string }[] = [
+    { value: "none", label: "Does not repeat" },
+    { value: "daily", label: "Every day" },
+    { value: "weekdays", label: "Every weekday (Mon–Fri)" },
+    { value: "weekly", label: "Every week" },
+    { value: "biweekly", label: "Every 2 weeks" },
+    { value: "monthly", label: "Every month" },
+    { value: "yearly", label: "Every year" },
+    { value: "custom", label: "Custom…" },
+  ];
+  const UNITS = [
+    { value: "days", label: "day(s)" },
+    { value: "weeks", label: "week(s)" },
+    { value: "months", label: "month(s)" },
   ];
   const CHANNELS: { v: ReminderChannel; label: string; icon: string }[] = [
     { v: "notification", label: "Notify", icon: "bell" },
@@ -104,16 +121,23 @@
 </script>
 
 <div class="re" transition:slide={{ duration: 160 }}>
-  <!-- When -->
-  <div class="grid grid-cols-2 gap-2">
-    <label class="fld">
-      <span class="lbl">Date</span>
-      <input type="date" class="field no-drag" bind:value={date} min={ymd(new Date())} />
-    </label>
-    <label class="fld">
-      <span class="lbl">Time</span>
-      <input type="time" class="field no-drag" bind:value={time} />
-    </label>
+  <!-- When: calendar + time -->
+  <div class="fld">
+    <span class="lbl">When</span>
+    <button class="date-row no-drag" class:on={showCal} onclick={() => (showCal = !showCal)}>
+      <Icon name="calendar" size={14} style="color: var(--color-accent);" />
+      <span class="date-val">{fmtDay(date)}</span>
+      <span class="date-time">{fmtTime(time)}</span>
+      <Icon name="chevron-down" size={14} class={showCal ? "rotate-180 text-ink-faint" : "text-ink-faint"} />
+    </button>
+    {#if showCal}
+      <div class="cal" transition:slide={{ duration: 150 }}>
+        <DatePicker current={date} onPick={pickDate} allowNone={false} />
+      </div>
+    {/if}
+    <div class="mt-2">
+      <TimePicker value={time} onChange={(v) => (time = v)} />
+    </div>
   </div>
 
   {#if isPast}
@@ -121,24 +145,18 @@
   {/if}
 
   <!-- Repeat -->
-  <label class="fld">
+  <div class="fld">
     <span class="lbl">Repeat</span>
-    <select class="field no-drag" bind:value={mode}>
-      {#each REPEATS as r (r.v)}
-        <option value={r.v}>{r.label}</option>
-      {/each}
-    </select>
-  </label>
+    <Select value={mode} options={REPEATS} ariaLabel="Repeat" onChange={(v) => (mode = v as RepeatMode)} />
+  </div>
 
   {#if mode === "custom"}
     <div class="flex items-center gap-2" transition:slide={{ duration: 140 }}>
-      <span class="lbl shrink-0">Every</span>
-      <input type="number" min="1" max="365" class="field no-drag w-16" bind:value={customN} />
-      <select class="field no-drag flex-1" bind:value={customUnit}>
-        <option value="days">day(s)</option>
-        <option value="weeks">week(s)</option>
-        <option value="months">month(s)</option>
-      </select>
+      <span class="lbl shrink-0 !normal-case !text-[12px] !tracking-normal !text-ink-soft">Every</span>
+      <input type="number" min="1" max="365" class="num no-drag" bind:value={customN} aria-label="Interval" />
+      <div class="flex-1">
+        <Select value={customUnit} options={UNITS} ariaLabel="Unit" compact onChange={(v) => (customUnit = v as CustomUnit)} />
+      </div>
     </div>
   {/if}
 
@@ -146,41 +164,51 @@
   {#if repeats}
     <div class="fld" transition:slide={{ duration: 140 }}>
       <span class="lbl">Ends</span>
-      <div class="flex items-center gap-2 flex-wrap">
-        <div class="seg">
-          {#each [["never", "Never"], ["on", "On date"], ["after", "After"]] as [v, l] (v)}
-            <button class="seg-b" class:on={endMode === v} onclick={() => (endMode = v as EndMode)}>{l}</button>
-          {/each}
-        </div>
-        {#if endMode === "on"}
-          <input type="date" class="field no-drag" bind:value={endDate} min={date} />
-        {:else if endMode === "after"}
-          <span class="flex items-center gap-1.5 text-[12px] text-ink-faint">
-            <input type="number" min="1" max="999" class="field no-drag w-16" bind:value={occurrences} /> times
-          </span>
-        {/if}
+      <div class="tabs3">
+        {#each [["never", "Never"], ["on", "On date"], ["after", "After"]] as [v, l] (v)}
+          <button class="tab3" class:on={endMode === v} onclick={() => (endMode = v as EndMode)}>{l}</button>
+        {/each}
       </div>
+      {#if endMode === "on"}
+        <div transition:slide={{ duration: 130 }}>
+          <button class="date-row no-drag mt-2" class:on={showEndCal} onclick={() => (showEndCal = !showEndCal)}>
+            <Icon name="calendar-clock" size={14} style="color: var(--color-accent);" />
+            <span class="date-val">{endDate ? fmtDay(endDate) : "Pick an end date"}</span>
+            <Icon name="chevron-down" size={14} class={showEndCal ? "rotate-180 text-ink-faint" : "text-ink-faint"} />
+          </button>
+          {#if showEndCal}
+            <div class="cal" transition:slide={{ duration: 150 }}>
+              <DatePicker current={endDate || date} onPick={pickEnd} allowNone={false} />
+            </div>
+          {/if}
+        </div>
+      {:else if endMode === "after"}
+        <div class="flex items-center gap-2 mt-2 text-[12.5px] text-ink-soft" transition:slide={{ duration: 130 }}>
+          <input type="number" min="1" max="999" class="num no-drag" bind:value={occurrences} aria-label="Occurrences" /> times
+        </div>
+      {/if}
     </div>
   {/if}
 
-  <!-- Channel -->
+  <!-- Notify via -->
   <div class="fld">
     <span class="lbl">Notify via</span>
-    <div class="seg">
+    <div class="chtabs">
       {#each CHANNELS as c (c.v)}
-        <button class="seg-b" class:on={channel === c.v} onclick={() => (channel = c.v)}>
-          <Icon name={c.icon} size={12} /> {c.label}
+        <button class="chtab" class:on={channel === c.v} onclick={() => (channel = c.v)} aria-pressed={channel === c.v}>
+          <Icon name={c.icon} size={15} />
+          <span>{c.label}</span>
         </button>
       {/each}
     </div>
   </div>
 
   <!-- Note -->
-  <label class="fld">
-    <span class="lbl">Note <span class="text-ink-ghost">(optional)</span></span>
+  <div class="fld">
+    <span class="lbl">Note <span class="text-ink-ghost normal-case tracking-normal">optional</span></span>
     <input class="field no-drag" style="user-select:text;" placeholder="e.g. Bring the signed copy"
       bind:value={note} onkeydown={(e) => e.key === "Enter" && submit()} />
-  </label>
+  </div>
 
   <div class="flex items-center gap-2 pt-0.5">
     <div class="flex-1 text-[11px] text-ink-ghost">
@@ -197,61 +225,116 @@
   .re {
     display: flex;
     flex-direction: column;
-    gap: 10px;
-    padding: 11px;
-    border: 0.5px solid var(--line);
-    border-radius: var(--radius-md);
-    background: color-mix(in oklab, var(--color-accent) 4%, white);
+    gap: 12px;
+    padding: 13px;
+    border: 0.5px solid color-mix(in oklab, var(--color-accent) 22%, var(--line));
+    border-radius: var(--radius-lg);
+    background: var(--violet-50);
   }
   .fld {
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: 6px;
   }
   .lbl {
     font-size: 10.5px;
-    font-weight: 600;
-    letter-spacing: 0.03em;
+    font-weight: 700;
+    letter-spacing: 0.04em;
     text-transform: uppercase;
     color: var(--color-ink-faint);
   }
+  .date-row {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    width: 100%;
+    padding: 9px 12px;
+    border-radius: var(--radius-md);
+    border: 0.5px solid var(--line-strong);
+    background: #fff;
+    transition: border-color 0.12s ease, box-shadow 0.12s ease;
+  }
+  .date-row:hover { border-color: color-mix(in oklab, var(--color-accent) 40%, var(--line-strong)); }
+  .date-row.on { border-color: var(--color-accent); box-shadow: 0 0 0 3px color-mix(in oklab, var(--color-accent) 18%, transparent); }
+  .date-val { font-size: 13px; font-weight: 600; color: var(--color-ink); }
+  .date-time { margin-left: auto; font-size: 12.5px; font-weight: 600; color: var(--color-accent-strong); font-variant-numeric: tabular-nums; }
+  .cal {
+    margin-top: 8px;
+    padding: 10px;
+    border: 0.5px solid var(--line);
+    border-radius: var(--radius-md);
+    background: #fff;
+  }
+  .num {
+    width: 60px;
+    padding: 7px 10px;
+    font-size: 12.5px;
+    text-align: center;
+    color: var(--color-ink);
+    background: #fff;
+    border: 0.5px solid var(--line-strong);
+    border-radius: var(--radius-md);
+    outline: none;
+  }
+  .num:focus { border-color: var(--color-accent); box-shadow: 0 0 0 3px color-mix(in oklab, var(--color-accent) 18%, transparent); }
   .past {
     display: flex;
     align-items: center;
     gap: 5px;
     font-size: 11.5px;
     color: var(--color-warn);
-    margin: -2px 0 0;
+    margin: -4px 0 0;
   }
-  /* Segmented control. */
-  .seg {
+  /* small 3-way tab strip (Ends) */
+  .tabs3 {
     display: inline-flex;
     padding: 2px;
     gap: 2px;
     background: color-mix(in oklab, var(--color-ink) 7%, transparent);
-    border-radius: var(--radius-sm);
+    border-radius: var(--radius-md);
   }
-  .seg-b {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    padding: 4px 9px;
+  .tab3 {
+    padding: 5px 11px;
     font-size: 11.5px;
-    font-weight: 550;
+    font-weight: 600;
     color: var(--color-ink-faint);
-    border-radius: calc(var(--radius-sm) - 2px);
+    border-radius: calc(var(--radius-md) - 3px);
     transition: all 0.12s ease;
   }
-  .seg-b.on {
+  .tab3.on {
     background: #fff;
-    color: var(--color-ink);
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+    color: var(--color-accent-strong);
+    box-shadow: 0 1px 3px rgba(28, 27, 42, 0.12);
+  }
+  /* notify-via: three equal, prominent tabs */
+  .chtabs {
+    display: flex;
+    gap: 6px;
+  }
+  .chtab {
+    flex: 1;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 9px 6px;
+    font-size: 12.5px;
+    font-weight: 600;
+    color: var(--color-ink-faint);
+    background: #fff;
+    border: 0.5px solid var(--line-strong);
+    border-radius: var(--radius-md);
+    transition: all 0.14s ease;
+  }
+  .chtab:hover { border-color: color-mix(in oklab, var(--color-accent) 40%, var(--line-strong)); color: var(--color-ink); }
+  .chtab.on {
+    color: #fff;
+    background: var(--color-accent);
+    border-color: transparent;
+    box-shadow: 0 4px 12px -5px rgba(92, 79, 214, 0.5);
   }
   .btn-sm {
-    padding: 5px 11px;
+    padding: 6px 12px;
     font-size: 12px;
-  }
-  .w-16 {
-    width: 62px;
   }
 </style>

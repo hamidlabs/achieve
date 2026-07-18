@@ -14,14 +14,14 @@ Achieve is a proactive desktop day-companion. It is not a passive time tracker: 
 
 ## Brand Personality
 
-Calm, premium, humane. Quiet macOS-native craft — frosted glass, teal accent, restrained motion. The voice encourages and never guilt-trips: it nudges, it doesn't nag; rescheduling is free and blameless; progress is reflected honestly, not celebrated with confetti. It should feel like a trusted companion sitting just off to the side, not a taskmaster or a dashboard demanding attention.
+Calm, premium, humane. A soft, modern mobile-app surface: a lavender-tinted light background, white cards with soft violet-tinted shadows, generous radii, and a single restrained violet accent (calm and desaturated, never neon). A persistent bottom icon nav with one raised "add" action carries navigation, so each screen stays a quiet greeting surface. The voice encourages and never guilt-trips: it nudges, it doesn't nag; rescheduling is free and blameless; progress is reflected honestly, not celebrated with confetti. It should feel like a trusted companion sitting just off to the side, not a taskmaster or a dashboard demanding attention.
 
 ## Anti-references
 
-- **Corporate / enterprise admin panels** — cold, gray, dense forms and tables. The primary thing to avoid.
-- **Generic AI-SaaS slop** — purple gradients, hero-metric tiles, endless identical icon+heading cards, the "AI made this" look.
-- **Gamified / childish productivity apps** — streak confetti, mascots, badges, loud reward animations.
-- **"Shit glowing buttons"** and heavy neon effects; keep buttons flat and native.
+- **Corporate / enterprise admin panels**: cold, gray, dense forms and tables. The primary thing to avoid.
+- **Gradient-drenched AI-SaaS slop**: loud violet gradients everywhere, hero-metric templates, endless identical icon+heading cards, the "AI made this" look. The violet accent is one calm color used with restraint (primary actions, current selection, the single Insights hero), not a wash across every surface.
+- **Gamified / childish productivity apps**: streak confetti, mascots, badges, loud reward animations.
+- **Glowing neon buttons** and heavy effects; buttons stay flat, solid, and native (no bounce/elastic motion).
 
 ## Design Principles
 

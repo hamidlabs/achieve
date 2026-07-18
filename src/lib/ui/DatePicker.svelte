@@ -138,7 +138,7 @@
     transition: background 0.1s ease;
   }
   .row:hover {
-    background: rgba(0, 0, 0, 0.05);
+    background: var(--violet-50);
   }
   .nav {
     display: grid;
@@ -149,8 +149,8 @@
     color: var(--color-ink-faint);
   }
   .nav:hover {
-    background: rgba(0, 0, 0, 0.06);
-    color: var(--color-ink);
+    background: var(--violet-50);
+    color: var(--color-accent);
   }
   .day {
     aspect-ratio: 1;

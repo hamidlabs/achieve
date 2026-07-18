@@ -85,6 +85,25 @@ pub struct Reminder {
     pub status: String,
 }
 
+/// A free-form, separately-editable markdown note attached to a task. Notes
+/// accrue over time into a dated journal per task (and across all tasks); each
+/// carries the owning task's title/color so the history/search view can render
+/// it without a second lookup.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Note {
+    pub id: i64,
+    pub task_id: i64,
+    pub task_title: String,
+    pub category_color: Option<String>,
+    pub body_md: String,
+    /// Created time, local "YYYY-MM-DD HH:MM" (for grouping + display).
+    pub created_local: String,
+    /// Last-edited time, local "YYYY-MM-DD HH:MM".
+    pub updated_local: String,
+    /// Created time, UTC "YYYY-MM-DD HH:MM:SS" (stable sort key).
+    pub created_at: String,
+}
+
 /// User-tunable rest-break (ultradian) settings.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BreakSettings {

@@ -1,50 +1,87 @@
 @import "tailwindcss";
 
 /*
-  Achieve design system — light, native macOS.
-  Clean solid surfaces, Apple system colors, thin SF-style outline icons.
+  Achieve design system — "Calm Violet".
+  A soft, modern mobile-app surface: lavender-tinted light background, white
+  cards with soft violet-tinted shadows, one restrained violet accent, generous
+  radii, and a persistent bottom icon nav. Design serves the product: the UI
+  recedes so the day leads. One accent, quiet motion, no gradient-drench.
 */
 @theme {
   --font-sans: -apple-system, "SF Pro Text", system-ui, "Inter", "Helvetica Neue",
     sans-serif;
 
-  /* ink (text) — grays darkened so muted text meets WCAG AA (>=4.5:1 on the
-     light glass). --ink-faint carries readable secondary/placeholder text
-     (~5:1); --ink-ghost is the lightest tier for small decorative labels,
-     chevrons, and chart ticks (~3.8:1, above the 3:1 non-text bar). */
-  --color-ink: #1d1d1f;
-  --color-ink-soft: #494951;
-  --color-ink-faint: #656569;
-  --color-ink-ghost: #79797f;
+  /* ---- ink (text) ----
+     Violet-tinted near-black ramp. Every tier is checked for WCAG AA on white
+     and on the lavender-tinted surface: --ink-faint carries readable secondary
+     text (~5:1), --ink-ghost is the lightest decorative tier (~3.6:1, above the
+     3:1 non-text floor). */
+  --color-ink: #1c1b2a;
+  --color-ink-soft: #45435c;
+  --color-ink-faint: #63617c;
+  --color-ink-ghost: #8b88a3;
 
-  /* Accent = the break-UI teal (was Apple blue) */
-  --color-accent: #18a89e;
-  --color-accent-2: #18a89e;
-  --color-accent-soft: #5cc4bc;
-  --color-positive: #28a745;
-  --color-warn: #ff9500;
-  --color-danger: #ff3b30;
+  /* ---- accent = calm violet ----
+     --accent-bright: the luminous violet for rings, dots, active indicators on
+     light. --accent: the AA-safe fill for solid buttons / white text (5.2:1).
+     --accent-strong: hover/press + text-on-white. */
+  --color-accent: #5c4fd6;
+  --color-accent-bright: #6d5ef0;
+  --color-accent-strong: #4a3ec2;
+  --color-accent-2: #6d5ef0;
+  --color-accent-soft: #a99df5;
 
-  /* category hues */
-  --color-cat-1: #0a84ff;
-  --color-cat-2: #30b0a8;
-  --color-cat-3: #ff9f0a;
-  --color-cat-4: #bf5af2;
+  /* violet tints (backgrounds, wells, highlights) */
+  --violet-50: #f3f1fd;
+  --violet-100: #e8e5fb;
+  --violet-150: #ddd8f8;
+  --violet-tint: color-mix(in oklab, var(--color-accent) 10%, #ffffff);
 
-  /* hairlines / separators */
-  --line: rgba(0, 0, 0, 0.1);
-  --line-strong: rgba(0, 0, 0, 0.16);
+  /* ---- semantic state ---- */
+  --color-positive: #1fa878;
+  --color-positive-bright: #26c08c;
+  --color-warn: #e0913a;
+  --color-danger: #e04b45;
 
-  /* window surface */
-  --win-top: #ffffff;
-  --win-bot: #f1f1f4;
+  /* category hues — a calm, modern spread that sits beside the violet accent */
+  --color-cat-1: #5c8dff;
+  --color-cat-2: #21b0a4;
+  --color-cat-3: #e8974a;
+  --color-cat-4: #b673f0;
+
+  /* hairlines / separators (violet-tinted, very low alpha) */
+  --line: rgba(28, 27, 42, 0.08);
+  --line-strong: rgba(28, 27, 42, 0.14);
+
+  /* ---- surfaces ---- */
+  --win-top: #fbfaff;
+  --win-bot: #eef0fb;
   --glass-top: #ffffff;
-  --glass-bot: #f2f2f5;
+  --glass-bot: #f4f4fc;
+  --card: #ffffff;
+  --card-2: #faf9ff; /* faintly-tinted well for nested sections */
 
-  --radius-card: 14px;
-  --radius-lg: 12px;
-  --radius-md: 8px;
-  --radius-sm: 6px;
+  /* soft, violet-tinted elevation */
+  --shadow-card: 0 1px 2px rgba(30, 27, 75, 0.05), 0 8px 24px -12px rgba(46, 40, 110, 0.16);
+  --shadow-pop: 0 12px 34px -10px rgba(38, 33, 90, 0.32);
+  --shadow-fab: 0 6px 18px -4px rgba(92, 79, 214, 0.5);
+
+  /* radii — mobile-soft, generous */
+  --radius-card: 22px;
+  --radius-lg: 18px;
+  --radius-md: 13px;
+  --radius-sm: 9px;
+  --radius-pill: 999px;
+
+  /* semantic z-scale (no arbitrary 9999s) */
+  --z-nav: 30;
+  --z-sticky: 40;
+  --z-scrim: 50;
+  --z-pop: 60;
+  --z-toast: 70;
+
+  /* bottom nav height (kept in sync with window auto-fit math) */
+  --nav-h: 66px;
 }
 
 :root {
@@ -67,80 +104,87 @@ body {
 #app {
   height: 100vh;
   width: 100vw;
-  /* No padding: the glass card fills the whole window so niri's rounded clip
-     (geometry-corner-radius) matches the card edge and there's no transparent
-     margin for the compositor blur to fill (which read as an extra background). */
   box-sizing: border-box;
 }
 
 /* ---------- window surface ----------
-   Solid, opaque card with a soft multi-color gradient "spread" (a light mesh of
-   accent / teal / indigo blobs over white) so every view reads as one calm,
-   premium surface. Kept low-alpha = professional, not loud. niri rounds + clips
-   the window to the card radius. */
+   A calm lavender-tinted light wash. Two faint violet glows top-corners give
+   depth without loudness; the compositor rounds + clips the window to the card
+   radius so the fill reaches every edge. */
 .glass {
   position: relative;
   width: 100%;
   height: 100%;
   background:
-    radial-gradient(58% 44% at 8% -4%, color-mix(in oklab, var(--color-accent) 16%, transparent), transparent 60%),
-    radial-gradient(52% 40% at 104% 4%, color-mix(in oklab, #2aa39a 16%, transparent), transparent 62%),
-    radial-gradient(70% 56% at 50% 116%, color-mix(in oklab, #6b6bff 12%, transparent), transparent 70%),
-    linear-gradient(180deg, var(--win-top), var(--win-bot));
-  /* Edge definition; the outer drop-shadow is omitted because niri clips the
-     window to its geometry, which would clip the shadow anyway. */
-  border: 0.5px solid rgba(0, 0, 0, 0.1);
-  box-shadow: inset 0 0.5px 0 rgba(255, 255, 255, 0.6);
+    radial-gradient(62% 42% at 6% -6%, color-mix(in oklab, var(--color-accent-bright) 12%, transparent), transparent 60%),
+    radial-gradient(54% 40% at 108% 2%, color-mix(in oklab, #8f7bff 11%, transparent), transparent 62%),
+    linear-gradient(178deg, var(--win-top), var(--win-bot));
+  border: 0.5px solid rgba(28, 27, 42, 0.08);
+  box-shadow: inset 0 0.5px 0 rgba(255, 255, 255, 0.7);
   overflow: hidden;
 }
 
-/* inner panels */
-.panel {
-  background: rgba(0, 0, 0, 0.025);
+/* ---------- cards & panels ----------
+   .card       — top-level floating card: white, soft violet shadow, big radius.
+   .panel      — nested "well": a faintly-tinted inset section (never a 2nd card).
+   .panel-raised — a lifted white card (used where one panel must pop). */
+.card {
+  background: var(--card);
   border: 0.5px solid var(--line);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card);
+}
+.panel {
+  background: var(--card-2);
+  border: 0.5px solid var(--line);
+  border-radius: var(--radius-lg);
 }
 .panel-raised {
-  background: #ffffff;
+  background: var(--card);
   border: 0.5px solid var(--line);
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card);
 }
 
-/* ---------- buttons (native macOS) ---------- */
+/* ---------- buttons ----------
+   Flat, native, calm (no neon glow). Pills for primary CTAs; soft radius for
+   the rest. Every button has hover + active states. */
 .btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 6px;
   font-size: 13px;
-  font-weight: 500;
-  border-radius: var(--radius-sm);
-  padding: 5px 14px;
+  font-weight: 600;
+  border-radius: var(--radius-md);
+  padding: 8px 15px;
   cursor: default;
-  transition: filter 0.1s ease, background 0.12s ease;
+  transition: filter 0.12s ease, background 0.14s ease, box-shadow 0.14s ease, transform 0.06s ease;
   white-space: nowrap;
 }
 .btn:active {
-  filter: brightness(0.94);
+  transform: translateY(0.5px);
+  filter: brightness(0.96);
 }
 .btn-primary {
-  color: white;
-  background: linear-gradient(180deg, #2bbcb1, var(--color-accent));
+  color: #fff;
+  background: var(--color-accent);
   box-shadow:
-    inset 0 0.5px 0 rgba(255, 255, 255, 0.5),
-    0 6px 16px -9px rgba(24, 168, 158, 0.7),
-    0 1px 1.5px rgba(0, 0, 0, 0.12);
+    inset 0 0.5px 0 rgba(255, 255, 255, 0.28),
+    0 4px 12px -5px rgba(92, 79, 214, 0.6);
 }
 .btn-primary:hover {
-  filter: brightness(1.04);
+  background: var(--color-accent-strong);
 }
 .btn-soft {
   color: var(--color-ink);
-  background: linear-gradient(180deg, #ffffff, #f6f6f8);
+  background: #fff;
   border: 0.5px solid var(--line-strong);
-  box-shadow: 0 1px 1.5px rgba(0, 0, 0, 0.06);
+  box-shadow: 0 1px 2px rgba(28, 27, 42, 0.05);
 }
 .btn-soft:hover {
-  background: linear-gradient(180deg, #ffffff, #eeeef1);
+  background: var(--violet-50);
+  border-color: color-mix(in oklab, var(--color-accent) 26%, var(--line-strong));
 }
 .btn-ghost {
   color: var(--color-ink-soft);
@@ -148,65 +192,64 @@ body {
 }
 .btn-ghost:hover {
   color: var(--color-ink);
-  background: rgba(0, 0, 0, 0.05);
+  background: color-mix(in oklab, var(--color-ink) 5%, transparent);
 }
 .btn-positive {
-  color: white;
-  background: linear-gradient(180deg, #34c759, var(--color-positive));
+  color: #fff;
+  background: var(--color-positive);
   box-shadow:
-    inset 0 0.5px 0 rgba(255, 255, 255, 0.45),
-    0 6px 16px -9px rgba(40, 167, 69, 0.6),
-    0 1px 1.5px rgba(0, 0, 0, 0.12);
+    inset 0 0.5px 0 rgba(255, 255, 255, 0.28),
+    0 4px 12px -5px rgba(31, 168, 120, 0.55);
 }
 .btn-positive:hover {
-  filter: brightness(1.04);
+  filter: brightness(1.05);
 }
-/* destructive: white button, red label (like macOS Delete) */
 .btn-danger-ghost {
   color: var(--color-danger);
-  background: linear-gradient(180deg, #ffffff, #f6f6f8);
+  background: #fff;
   border: 0.5px solid var(--line-strong);
-  box-shadow: 0 1px 1.5px rgba(0, 0, 0, 0.06);
+  box-shadow: 0 1px 2px rgba(28, 27, 42, 0.05);
 }
 .btn-danger-ghost:hover {
-  background: #fff2f1;
+  background: color-mix(in oklab, var(--color-danger) 8%, #fff);
+  border-color: color-mix(in oklab, var(--color-danger) 32%, transparent);
 }
 
+/* icon-only button (toolbar / row tools) */
 .icon-btn {
   display: inline-grid;
   place-items: center;
-  width: 28px;
-  height: 28px;
-  border-radius: 7px;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-md);
   color: var(--color-ink-faint);
-  transition: all 0.12s ease;
+  transition: color 0.12s ease, background 0.12s ease;
   cursor: default;
 }
 .icon-btn:hover {
-  color: var(--color-ink);
-  background: rgba(0, 0, 0, 0.06);
+  color: var(--color-accent);
+  background: var(--violet-50);
 }
 
-/* ---------- inputs (native) ---------- */
+/* ---------- inputs ---------- */
 .field {
   width: 100%;
-  font-size: 13px;
+  font-size: 13.5px;
   color: var(--color-ink);
-  background: #ffffff;
+  background: #fff;
   border: 0.5px solid var(--line-strong);
-  border-radius: var(--radius-sm);
-  padding: 6px 10px;
+  border-radius: var(--radius-md);
+  padding: 9px 12px;
   outline: none;
-  box-shadow: inset 0 1px 1px rgba(0, 0, 0, 0.04);
-  transition: border 0.12s ease, box-shadow 0.12s ease;
+  box-shadow: inset 0 1px 1px rgba(28, 27, 42, 0.03);
+  transition: border 0.14s ease, box-shadow 0.14s ease;
 }
 .field::placeholder {
-  /* Placeholders are real text: use the AA-legible faint tier, not ghost. */
   color: var(--color-ink-faint);
 }
 .field:focus {
   border-color: var(--color-accent);
-  box-shadow: 0 0 0 3px rgba(24, 168, 158, 0.28);
+  box-shadow: 0 0 0 3.5px color-mix(in oklab, var(--color-accent) 22%, transparent);
 }
 
 /* ---------- pills / chips ---------- */
@@ -215,23 +258,120 @@ body {
   align-items: center;
   gap: 5px;
   font-size: 11.5px;
-  font-weight: 500;
-  padding: 3px 9px;
-  border-radius: 999px;
-  background: rgba(0, 0, 0, 0.05);
-  color: var(--color-ink-soft);
+  font-weight: 600;
+  padding: 4px 10px;
+  border-radius: var(--radius-pill);
+  background: var(--violet-50);
+  color: var(--color-accent-strong);
 }
 
-/* ---------- scrollbar ----------
-   Desktop app, not a web page: scroll stays functional everywhere, but the
-   scrollbar itself is hidden (WebKit pseudo-element + standards property). */
+/* ---------- bottom nav ----------
+   A white bar pinned to the window bottom with icon+label items and one raised
+   violet FAB. Active item goes violet with a soft rounded highlight. */
+.bottom-nav {
+  position: relative;
+  z-index: var(--z-nav);
+  flex-shrink: 0;
+  height: var(--nav-h);
+  display: flex;
+  align-items: stretch;
+  justify-content: space-around;
+  padding: 6px 10px calc(6px + env(safe-area-inset-bottom, 0px));
+  background: color-mix(in oklab, #ffffff 88%, var(--win-bot));
+  border-top: 0.5px solid var(--line);
+  box-shadow: 0 -6px 20px -14px rgba(38, 33, 90, 0.28);
+  -webkit-backdrop-filter: saturate(140%) blur(8px);
+  backdrop-filter: saturate(140%) blur(8px);
+}
+.nav-item {
+  flex: 1;
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  border-radius: var(--radius-md);
+  color: var(--color-ink-faint);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  transition: color 0.16s ease, transform 0.12s ease;
+  cursor: default;
+}
+.nav-item .nav-ico {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 26px;
+  border-radius: var(--radius-pill);
+  transition: background 0.18s ease, color 0.18s ease;
+}
+.nav-item:hover {
+  color: var(--color-ink);
+}
+.nav-item.on {
+  color: var(--color-accent-strong);
+}
+.nav-item.on .nav-ico {
+  background: var(--violet-50);
+  color: var(--color-accent);
+}
+.nav-item:active {
+  transform: translateY(1px);
+}
+/* raised center FAB (Add) */
+.nav-fab {
+  flex: 0 0 auto;
+  align-self: center;
+  display: grid;
+  place-items: center;
+  width: 52px;
+  height: 52px;
+  margin: 0 6px;
+  border-radius: var(--radius-pill);
+  color: #fff;
+  background: var(--color-accent);
+  box-shadow: var(--shadow-fab), inset 0 0.5px 0 rgba(255, 255, 255, 0.35);
+  transform: translateY(-10px);
+  transition: background 0.16s ease, transform 0.1s ease, box-shadow 0.16s ease;
+  cursor: default;
+}
+.nav-fab:hover {
+  background: var(--color-accent-strong);
+  transform: translateY(-12px);
+}
+.nav-fab:active {
+  transform: translateY(-8px);
+}
+
+/* ---------- top app bar (greeting header) ---------- */
+.app-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px 18px 10px;
+  flex-shrink: 0;
+}
+.app-bar-badge {
+  display: inline-grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 13px;
+  color: #fff;
+  background: linear-gradient(150deg, var(--color-accent-bright), var(--color-accent-strong));
+  box-shadow: 0 4px 12px -5px rgba(92, 79, 214, 0.55);
+  flex-shrink: 0;
+}
+
+/* ---------- scrollbar (hidden; desktop app) ---------- */
 * {
-  scrollbar-width: none; /* Firefox / standards */
+  scrollbar-width: none;
 }
 *::-webkit-scrollbar {
   width: 0;
   height: 0;
-  display: none; /* webkit2gtk */
+  display: none;
 }
 
 /* ---------- markdown render ---------- */
@@ -244,7 +384,7 @@ body {
 .md h2,
 .md h3 {
   color: var(--color-ink);
-  font-weight: 650;
+  font-weight: 700;
   margin: 0.5em 0 0.3em;
 }
 .md h1 { font-size: 15px; }
@@ -257,15 +397,16 @@ body {
 .md code {
   font-family: ui-monospace, "SF Mono", monospace;
   font-size: 12px;
-  background: rgba(0, 0, 0, 0.05);
-  color: var(--color-ink);
+  background: var(--violet-50);
+  color: var(--color-accent-strong);
   padding: 1px 5px;
   border-radius: 5px;
 }
 .md a { color: var(--color-accent); text-decoration: none; }
+.md a:hover { text-decoration: underline; }
 .md input[type="checkbox"] { margin-right: 6px; accent-color: var(--color-accent); }
 .md blockquote {
-  border-left: 3px solid rgba(0, 0, 0, 0.12);
+  border-left: 3px solid color-mix(in oklab, var(--color-accent) 28%, transparent);
   padding-left: 10px;
   color: var(--color-ink-faint);
   margin: 0.4em 0;
@@ -321,7 +462,7 @@ body {
 }
 .veil-stats b {
   color: var(--color-ink);
-  font-weight: 650;
+  font-weight: 700;
   font-size: 14px;
 }
 .veil-sep { color: var(--color-ink-ghost); }
@@ -334,10 +475,10 @@ body {
   color: var(--color-accent);
   background: #ffffff;
   border: 0.5px solid var(--line);
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  box-shadow: 0 1px 3px rgba(28, 27, 42, 0.12);
   animation: veilbob 1.8s ease-in-out infinite;
 }
-.veil:hover .veil-chevron { box-shadow: 0 2px 6px rgba(24, 168, 158, 0.22); }
+.veil:hover .veil-chevron { box-shadow: 0 2px 8px rgba(92, 79, 214, 0.28); }
 .veil-hint {
   display: inline-flex;
   align-items: center;
@@ -355,7 +496,7 @@ body {
   from { opacity: 0; transform: translateY(8px) scale(0.99); }
   to { opacity: 1; transform: translateY(0) scale(1); }
 }
-.rise { animation: rise 0.26s cubic-bezier(0.22, 1, 0.36, 1) both; }
+.rise { animation: rise 0.28s cubic-bezier(0.22, 1, 0.36, 1) both; }
 
 @keyframes fade {
   from { opacity: 0; }
@@ -369,7 +510,26 @@ body {
 }
 .pop { animation: pop 0.22s cubic-bezier(0.22, 1, 0.36, 1) both; }
 
-.stagger > * { animation: rise 0.28s cubic-bezier(0.22, 1, 0.36, 1) both; }
+/* For elements centered via `transform: translate(-50%,-50%)`: keep the translate
+   in every keyframe so the scale-in never wipes out the centering. */
+@keyframes popCenter {
+  0% { opacity: 0; transform: translate(-50%, -50%) scale(0.96); }
+  100% { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+}
+
+/* Material "fade through": outgoing fades out fast; incoming fades in while
+   scaling up slightly. Used for the calm view-to-view transition (no spatial
+   relationship between Today and Insights, so no directional slide). */
+@keyframes viewIn {
+  0% { opacity: 0; transform: scale(0.985); }
+  100% { opacity: 1; transform: scale(1); }
+}
+@keyframes viewOut {
+  0% { opacity: 1; }
+  100% { opacity: 0; }
+}
+
+.stagger > * { animation: rise 0.3s cubic-bezier(0.22, 1, 0.36, 1) both; }
 .stagger > *:nth-child(1) { animation-delay: 0.02s; }
 .stagger > *:nth-child(2) { animation-delay: 0.05s; }
 .stagger > *:nth-child(3) { animation-delay: 0.08s; }
@@ -378,3 +538,16 @@ body {
 .stagger > *:nth-child(6) { animation-delay: 0.17s; }
 .stagger > *:nth-child(7) { animation-delay: 0.2s; }
 .stagger > *:nth-child(8) { animation-delay: 0.23s; }
+
+@media (prefers-reduced-motion: reduce) {
+  .rise,
+  .fade,
+  .pop,
+  .stagger > *,
+  .veil-chevron {
+    animation: none !important;
+  }
+  * {
+    transition-duration: 0.01ms !important;
+  }
+}

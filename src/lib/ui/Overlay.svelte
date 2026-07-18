@@ -1,52 +1,37 @@
 <script lang="ts">
-  // The one overlay shell for the whole app: consistent styling from the shared
-  // tokens + correct window sizing so nothing clips in the short auto-fit hub.
+  // The one overlay shell for the whole app, sized to the fixed window frame.
   //
-  //  - "dialog"  (task editor): a FULL-BLEED panel that fills the window edge to
-  //    edge; the window is sized exactly to the panel's content, so there's no
-  //    stray background showing around it.
-  //  - "popover" (reschedule calendar, switch-task, break settings): a floating
-  //    centered card over a transparent click-catch; the window only GROWS to fit
-  //    it (never shrinks), so the list stays visible behind it.
+  //  - "sheet"   (task editor): a centered modal card that fills most of the
+  //    frame and scrolls internally.
+  //  - "popover" (reschedule calendar, switch-task, break settings): a smaller
+  //    centered card over a dimmed scrim.
   //
-  // Resize is debounced: content height ticks many times during a step/dropdown
-  // transition, and firing set_size + re-center on every tick makes the window
-  // crawl. Coalescing to the settled height gives one smooth resize.
+  // Both are centered with a flex WRAPPER (not a transform on the card), so the
+  // card is free to animate scale/opacity on entry without losing its position.
   import { onMount } from "svelte";
   import type { Snippet } from "svelte";
   import { store } from "../store.svelte";
-  import { api } from "../api";
 
   interface Props {
     onClose: () => void;
-    variant?: "dialog" | "popover";
+    /** "sheet" = big editor card; "popover" = compact card. ("dialog" kept as an alias for sheet.) */
+    variant?: "sheet" | "popover" | "dialog";
     maxWidth?: number;
-    /** Card inner padding in px. Dialogs manage their own (0); popovers get a default. */
+    /** Card inner padding in px. Sheets manage their own (0); popovers get a default. */
     pad?: number;
     children: Snippet;
   }
   let {
     onClose,
     variant = "popover",
-    maxWidth = variant === "dialog" ? 468 : 288,
-    pad = variant === "dialog" ? 0 : 8,
+    maxWidth,
+    pad,
     children,
   }: Props = $props();
 
-  const isDialog = variant === "dialog";
-  let cardH = $state(0);
-  let fitTimer: ReturnType<typeof setTimeout> | undefined;
-
-  $effect(() => {
-    const h = cardH;
-    if (h <= 0) return;
-    clearTimeout(fitTimer);
-    fitTimer = setTimeout(() => {
-      const needed = h + (isDialog ? 0 : 24); // popover: 12px card offset top+bottom
-      const target = isDialog ? needed : Math.max(window.innerHeight, needed);
-      api.fitWindow(Math.round(target)).catch(() => {});
-    }, 55);
-  });
+  const isSheet = $derived(variant === "sheet" || variant === "dialog");
+  const cardMax = $derived(maxWidth ?? (isSheet ? 396 : 300));
+  const cardPad = $derived(pad ?? (isSheet ? 0 : 12));
 
   onMount(() => {
     store.overlayCount += 1;
@@ -56,65 +41,63 @@
     window.addEventListener("keydown", onKey);
     return () => {
       window.removeEventListener("keydown", onKey);
-      clearTimeout(fitTimer);
       store.overlayCount = Math.max(0, store.overlayCount - 1);
-      store.fitTick += 1; // let the hub re-fit to the list once we're gone
     };
   });
 </script>
 
-{#if !isDialog}
-  <button class="ov-catch no-drag" aria-label="Close" onclick={onClose}></button>
-{/if}
-<div
-  class="ov-card no-drag"
-  class:dialog={isDialog}
-  style="max-width:{maxWidth}px; padding:{pad}px;"
-  bind:clientHeight={cardH}
->
-  {@render children()}
+<div class="ov-wrap no-drag" class:sheet={isSheet}>
+  <button class="ov-scrim" aria-label="Close" onclick={onClose}></button>
+  <div class="ov-card" class:card-sheet={isSheet} style="max-width:{cardMax}px; padding:{cardPad}px;">
+    {@render children()}
+  </div>
 </div>
 
 <style>
-  .ov-catch {
+  .ov-wrap {
     position: fixed;
     inset: 0;
-    z-index: 40;
-    background: transparent;
-    cursor: default;
-  }
-  .ov-card {
-    position: fixed;
-    z-index: 50;
-    left: 50%;
-    top: 50%;
-    transform: translate(-50%, -50%);
-    width: calc(100% - 24px);
-    /* Fixed (not 100vh): a viewport-relative cap would clamp clientHeight to the
-       current window, so content that grows (e.g. the category dropdown opening)
-       could never measure taller than the window and the window never grew. 720
-       stays under the backend's 760px fit_window clamp. */
-    max-height: 720px;
+    z-index: var(--z-pop);
     display: flex;
-    flex-direction: column;
-    background: linear-gradient(170deg, var(--glass-top), var(--glass-bot));
-    border: 0.5px solid var(--line-strong);
-    border-radius: var(--radius-lg);
-    box-shadow: 0 16px 40px -12px rgba(0, 0, 0, 0.4);
-    overflow: hidden;
+    align-items: center;
+    justify-content: center;
+    padding: 16px;
+  }
+  .ov-wrap.sheet {
+    padding: 14px;
+  }
+  .ov-scrim {
+    position: absolute;
+    inset: 0;
+    background: color-mix(in oklab, #171526 30%, transparent);
+    -webkit-backdrop-filter: blur(2px);
+    backdrop-filter: blur(2px);
+    cursor: default;
     animation: fade 0.16s ease both;
   }
-  /* Full-bleed dialog: fill the window edge to edge (top-anchored, full width,
-     content height). The window is sized to it, so it reads as the whole window. */
-  .ov-card.dialog {
-    left: 0;
-    top: 0;
-    transform: none;
+  .ov-card {
+    position: relative;
+    z-index: 1;
     width: 100%;
-    max-width: none !important;
-    height: auto;
-    border: none;
+    max-height: 100%;
+    display: flex;
+    flex-direction: column;
+    overflow-y: auto;
+    background: var(--card);
+    border: 0.5px solid var(--line-strong);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-pop);
+    transform-origin: center;
+    animation: pop 0.2s cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+  .ov-card.card-sheet {
     border-radius: var(--radius-card);
-    box-shadow: none;
+    overflow: hidden; /* the sheet manages its own inner scroll region */
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .ov-scrim,
+    .ov-card {
+      animation: none !important;
+    }
   }
 </style>
