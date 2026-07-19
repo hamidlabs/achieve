@@ -28,6 +28,11 @@ use crate::window;
 const TICK: Duration = Duration::from_secs(20);
 // If you are active with no task selected, re-offer to start one this often.
 const RENUDGE_AFTER: Duration = Duration::from_secs(5 * 60);
+// Audible untracked cue. You are present and working, but the clock isn't
+// running. The cue is a reminder, not an alarm, so it backs off: a grace period
+// before the first beep, then widening gaps, then silence (the visual nudge
+// keeps coming; the sound gives up rather than nagging all afternoon).
+const UNTRACKED_CUE_STEPS: [u64; 5] = [90, 3 * 60, 6 * 60, 12 * 60, 20 * 60];
 // On a failed daily-email send, wait this long before retrying (so a bad key or
 // a network blip retries a few times across the morning, not every 20s).
 const EMAIL_RETRY: Duration = Duration::from_secs(10 * 60);
@@ -46,6 +51,10 @@ pub fn spawn(app: AppHandle, db: Arc<Mutex<Connection>>, idle_flag: PathBuf, idl
         // (auto-pause on idle/suspend) transitions and refresh the task list.
         let mut last_active_seen: Option<Option<i64>> = None;
         let mut last_break_prompt: Option<Instant> = None;
+        // Untracked-cue state: when the current untracked stretch began, and how
+        // many cues we've played in it. Both reset the moment a task tracks.
+        let mut untracked_since: Option<Instant> = None;
+        let mut untracked_cues = 0usize;
         // Play the "break over" cue once per break, from the engine so it fires
         // even if the break window is hidden or the webview throttled its
         // countdown. Reset when the break ends.
@@ -188,6 +197,10 @@ pub fn spawn(app: AppHandle, db: Arc<Mutex<Connection>>, idle_flag: PathBuf, idl
                 if let Ok(c) = db.lock() {
                     let _ = db::close_open_away(&c, &crate::db::now());
                 }
+                // Fresh grace period on return: don't greet someone walking back
+                // to their desk with a beep they earned while they were gone.
+                untracked_since = None;
+                untracked_cues = 0;
             }
             was_idle = false;
 
@@ -305,6 +318,32 @@ pub fn spawn(app: AppHandle, db: Arc<Mutex<Connection>>, idle_flag: PathBuf, idl
             let needs_attention = snap.active_task_id.is_none() || snap.active_awaiting;
             let worth_surfacing =
                 snap.active_awaiting || snap.pending > 0 || snap.minutes_left_in_day > 0;
+
+            // Audible half of the same signal. This runs whether or not the
+            // window is visible: an open window you aren't looking at is exactly
+            // the case the beep is for. A break is deliberate untracked time, so
+            // it stays silent.
+            if needs_attention && worth_surfacing && !snap.on_break {
+                let since = *untracked_since.get_or_insert_with(Instant::now);
+                if let Some(&step) = UNTRACKED_CUE_STEPS.get(untracked_cues) {
+                    if since.elapsed() >= Duration::from_secs(step) {
+                        untracked_cues += 1;
+                        let muted = db
+                            .lock()
+                            .ok()
+                            .and_then(|c| db::setting(&c, "sound_muted"))
+                            .map(|v| v == "1")
+                            .unwrap_or(false);
+                        if !muted {
+                            crate::sound::play("warning");
+                        }
+                    }
+                }
+            } else {
+                untracked_since = None;
+                untracked_cues = 0;
+            }
+
             if !visible && needs_attention && worth_surfacing {
                 let due = last_nudge
                     .map(|t| t.elapsed() >= RENUDGE_AFTER)

@@ -7,8 +7,7 @@
   import DatePicker from "../ui/DatePicker.svelte";
   import { api } from "../api";
   import { store, refreshSnapshot, refreshTasks, openTaskEditor } from "../store.svelte";
-  import { onMount } from "svelte";
-  import { taskDone, noTaskWarning } from "../sound";
+  import { taskDone } from "../sound";
   import { assessTasks } from "../risk";
   import { fmtMin, catColor } from "../format";
   import type { Task, Bar, TimelineSpan } from "../types";
@@ -117,12 +116,6 @@
   const riskLevels = $derived(
     new Map(assessTasks(store.tasks, snap).map((r) => [r.task.id, r.level])),
   );
-
-  // Warn on mount when this popup surfaces with nothing actively tracked.
-  onMount(() => {
-    const s = store.snapshot;
-    if (s && !(s.active_task_id != null && !s.active_awaiting)) noTaskWarning();
-  });
 
   const awaiting = $derived(snap?.active_awaiting ?? false);
   const estMin = $derived(snap?.active_estimate_min ?? active?.estimate_min ?? null);

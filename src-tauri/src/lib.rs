@@ -140,6 +140,7 @@ pub fn run() {
             commands::quit_app,
             commands::send_summary_now,
             commands::play_sound,
+            commands::set_sound_muted,
             commands::list_reminders,
             commands::create_reminder,
             commands::update_reminder,

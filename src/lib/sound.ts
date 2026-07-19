@@ -30,6 +30,14 @@ function playCue(name: "pre_break" | "stop_break" | "warning"): void {
   });
 }
 
+/** Push the mute flag to the backend, which plays the untracked cue on its own
+ *  timer and so can't read localStorage. */
+function syncMuted(): void {
+  void invoke("set_sound_muted", { muted }).catch(() => {
+    /* backend unavailable (dev/browser): ignore */
+  });
+}
+
 /** Wire up mute state and unlock the Web Audio context (used by taskDone) on the
  *  first user interaction; some webviews start it suspended until a gesture. */
 export function initSound(): void {
@@ -39,6 +47,7 @@ export function initSound(): void {
   } catch {
     /* private mode / no storage */
   }
+  syncMuted();
   const unlock = () => context();
   window.addEventListener("pointerdown", unlock, { once: true, passive: true });
   window.addEventListener("keydown", unlock, { once: true });
@@ -54,6 +63,7 @@ export function setMuted(v: boolean): void {
   } catch {
     /* ignore */
   }
+  syncMuted();
   if (!v) context(); // resume/unlock when turning sound back on
 }
 
@@ -100,10 +110,11 @@ export function breakOver(): void {
   playCue("stop_break");
 }
 
-/** Nudge when no task is being tracked. */
-export function noTaskWarning(): void {
-  playCue("warning");
-}
+// The "nothing is tracking" cue is NOT played here. It belongs to a timer, not
+// to a render: the engine (src-tauri/src/engine.rs) plays it on a backing-off
+// cadence for as long as the untracked stretch lasts, whether the window is
+// open or hidden. Playing it on mount made it fire on every re-render and never
+// once the window was already up.
 
 /** Subtle, satisfying tick for completing a task. */
 export function taskDone(): void {

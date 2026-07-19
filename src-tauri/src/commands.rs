@@ -186,6 +186,20 @@ pub fn start_break(state: State<'_, AppState>, app: AppHandle) -> CmdResult<()> 
     let _ = emit_snapshot(&app, &state);
     // Now that the break is actually running, dim the second monitor too.
     crate::window::cover_second_monitor(&app);
+    // The veil window is only just being shown, so it likely missed the snapshot
+    // above. Re-emit a few times as its webview comes up so its countdown anchors
+    // promptly (it also self-polls, but this makes it instant).
+    for delay_ms in [250u64, 700, 1400] {
+        let app2 = app.clone();
+        let db = state.db.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(delay_ms));
+            if let Some(snap) = db.lock().ok().and_then(|c| db::snapshot(&c).ok()) {
+                use tauri::Emitter;
+                let _ = app2.emit("snapshot", &snap);
+            }
+        });
+    }
     Ok(())
 }
 
@@ -303,6 +317,14 @@ pub fn send_summary_now(state: State<'_, AppState>, offset: Option<i64>) -> CmdR
 #[tauri::command]
 pub fn play_sound(name: String) {
     crate::sound::play(&name);
+}
+
+/// Mirror the frontend's mute flag into the DB, so the engine (which plays the
+/// untracked cue on its own cadence, with no webview involved) honors it too.
+#[tauri::command]
+pub fn set_sound_muted(state: State<'_, AppState>, muted: bool) -> CmdResult<()> {
+    let c = state.db.lock().map_err(|e| e.to_string())?;
+    db::put_setting(&c, "sound_muted", if muted { "1" } else { "0" }).map_err(|e| e.to_string())
 }
 
 // ---- reminders ----
