@@ -319,10 +319,11 @@ pub fn spawn(app: AppHandle, db: Arc<Mutex<Connection>>, idle_flag: PathBuf, idl
             let worth_surfacing =
                 snap.active_awaiting || snap.pending > 0 || snap.minutes_left_in_day > 0;
 
-            // Audible half of the same signal. This runs whether or not the
-            // window is visible: an open window you aren't looking at is exactly
-            // the case the beep is for. A break is deliberate untracked time, so
-            // it stays silent.
+            // The untracked nudge: beep AND surface, together, as one signal.
+            // This runs whether or not the window is already visible, because
+            // "visible" usually means "open behind the browser you drifted into"
+            // — so we pull it to the front with focus rather than just showing
+            // it. A break is deliberate untracked time, so it stays silent.
             if needs_attention && worth_surfacing && !snap.on_break {
                 let since = *untracked_since.get_or_insert_with(Instant::now);
                 if let Some(&step) = UNTRACKED_CUE_STEPS.get(untracked_cues) {
@@ -337,6 +338,10 @@ pub fn spawn(app: AppHandle, db: Arc<Mutex<Connection>>, idle_flag: PathBuf, idl
                         if !muted {
                             crate::sound::play("warning");
                         }
+                        window::show_view_front(&app, "nudge");
+                        // The popup just happened; don't let the slower
+                        // re-nudge clock below fire a second one right after.
+                        last_nudge = Some(Instant::now());
                     }
                 }
             } else {

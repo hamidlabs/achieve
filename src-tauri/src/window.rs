@@ -83,6 +83,32 @@ fn niri_center() {
     });
 }
 
+/// Raise the hub above everything and focus it. A Wayland client cannot raise
+/// or focus itself (there is no protocol for it), so we ask niri to do it by
+/// window id. niri already floats our window, which puts it above all TILED
+/// windows; this additionally lifts it over other floating windows and moves
+/// keyboard focus, so a nudge lands in front of whatever you were doing.
+///
+/// Deliberately NOT used by ordinary navigation (tray, in-app routing): only
+/// the proactive untracked nudge is allowed to interrupt. Retries only until
+/// the window is found, then stops, so this is not the old retry storm.
+fn niri_raise(title: &str) {
+    let title = title.to_string();
+    std::thread::spawn(move || {
+        for delay in [40u64, 120, 260] {
+            std::thread::sleep(std::time::Duration::from_millis(delay));
+            if let Some(id) = niri_window_id(&title) {
+                let _ = std::process::Command::new("niri")
+                    .args(["msg", "action", "focus-window", "--id", &id.to_string()])
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .status();
+                return;
+            }
+        }
+    });
+}
+
 /// Cover the OTHER monitor with the dimming veil during a break. On a single
 /// monitor there's nothing to cover, so the veil stays hidden. Best-effort: any
 /// niri hiccup just leaves the second screen uncovered, never crashes.
@@ -211,4 +237,19 @@ pub fn show_view(app: &AppHandle, view: &str) {
             niri_center();
         }
     }
+}
+
+/// Show a view AND pull it to the front with focus, even if the window was
+/// already open behind something else. This is the interrupting variant of
+/// `show_view`, reserved for the untracked nudge: the whole point of that cue
+/// is that you have drifted off into another window, so surfacing behind that
+/// window would be useless. Always-on-top is not a thing a Wayland client can
+/// ask for, hence the niri raise.
+pub fn show_view_front(app: &AppHandle, view: &str) {
+    show_view(app, view);
+    let title = if break_lock(app, view) || view == "break" { "Achieve Break" } else { "Achieve" };
+    if let Some(win) = app.get_webview_window("main") {
+        let _ = win.set_focus(); // no-op on Wayland, correct elsewhere
+    }
+    niri_raise(title);
 }
