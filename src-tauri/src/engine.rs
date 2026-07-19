@@ -47,6 +47,12 @@ pub fn spawn(app: AppHandle, db: Arc<Mutex<Connection>>, idle_flag: PathBuf, idl
         let mut started = false;
         let mut last_nudge: Option<Instant> = None;
         let mut was_idle = false;
+        // Presence watermark: the last moment we had evidence the user was here,
+        // which is input activity OR audio playing. The idle cutoff is measured
+        // from THIS, not from `now - idle_secs`. Kept as both an Instant (for
+        // elapsed, no DB lock needed) and a DB timestamp (for the cutoff).
+        let mut present_at = Instant::now();
+        let mut present_ts = db::now();
         // Last active task id we told the frontend about, to detect engine-side
         // (auto-pause on idle/suspend) transitions and refresh the task list.
         let mut last_active_seen: Option<Option<i64>> = None;
@@ -174,11 +180,27 @@ pub fn spawn(app: AppHandle, db: Arc<Mutex<Connection>>, idle_flag: PathBuf, idl
             // nothing playing), e.g. a phone call at the desk. When the media
             // stops and input is still idle, the next tick pauses as usual.
             let idle = idle_flag.exists();
+            // Only ask about audio when input has gone quiet; while you're typing
+            // we already know you're here, and pw-dump is a subprocess.
+            let media_on = idle && media::any_playing();
             if idle {
-                if !was_idle && !media::any_playing() {
+                if media_on {
+                    // Input-idle but audio is playing: still here. Move the
+                    // watermark forward so the eventual cutoff lands where the
+                    // media stopped, not `idle_secs` ago.
+                    present_at = Instant::now();
+                    present_ts = db::now();
+                } else if !was_idle
+                    // Pause only once presence has been gone for the WHOLE idle
+                    // window. Measuring from the watermark is what stops a brief
+                    // silence (an ad break, pausing the video to think,
+                    // buffering) from instantly capping the segment and erasing
+                    // the last `idle_secs` of genuinely-watched time.
+                    && present_at.elapsed() >= Duration::from_secs(idle_secs as u64)
+                {
                     was_idle = true;
                     if let Ok(c) = db.lock() {
-                        if db::pause_for_idle(&c, idle_secs).unwrap_or(false) {
+                        if db::pause_for_idle(&c, &present_ts).unwrap_or(false) {
                             if let Ok(s) = db::snapshot(&c) {
                                 let _ = app.emit("snapshot", &s);
                             }
@@ -203,6 +225,9 @@ pub fn spawn(app: AppHandle, db: Arc<Mutex<Connection>>, idle_flag: PathBuf, idl
                 untracked_cues = 0;
             }
             was_idle = false;
+            // Real input activity: the strongest presence evidence there is.
+            present_at = Instant::now();
+            present_ts = db::now();
 
             // Reconcile the frontend task list whenever the active task changed
             // for a reason the frontend didn't initiate: idle/suspend auto-pause

@@ -239,27 +239,29 @@ fn recover(conn: &Connection) -> Result<()> {
 /// left running overnight stops accruing hours the user was asleep for, and how
 /// idle time is kept out of the "untracked" (distraction) total. Returns true if
 /// anything was closed (so the caller can refresh the UI).
-pub fn pause_for_idle(conn: &Connection, idle_secs: i64) -> Result<bool> {
-    let cutoff = format!("-{idle_secs} seconds");
+/// `away_since` is the moment presence actually ended, decided by the caller
+/// (see the engine's presence watermark). It is NOT `now - idle_secs`: audio
+/// playback counts as presence, so the last evidence of the user being here can
+/// be far more recent than the input-idle window, and capping blindly at
+/// `now - idle_secs` would retroactively erase real tracked work.
+pub fn pause_for_idle(conn: &Connection, away_since: &str) -> Result<bool> {
     let cap = |table: &str| -> Result<usize> {
         Ok(conn.execute(
             &format!(
                 "UPDATE {table}
-                    SET end_at = CASE WHEN start_at > datetime('now', ?1) THEN start_at
-                                      ELSE datetime('now', ?1) END
+                    SET end_at = CASE WHEN start_at > ?1 THEN start_at ELSE ?1 END
                   WHERE end_at IS NULL"
             ),
-            params![cutoff],
+            params![away_since],
         )?)
     };
     // Mark the capped work segment as auto-idle for transparency.
     let closed_seg = conn.execute(
         "UPDATE segments
-            SET end_at = CASE WHEN start_at > datetime('now', ?1) THEN start_at
-                              ELSE datetime('now', ?1) END,
+            SET end_at = CASE WHEN start_at > ?1 THEN start_at ELSE ?1 END,
                 reason = COALESCE(reason, 'auto-idle')
           WHERE end_at IS NULL",
-        params![cutoff],
+        params![away_since],
     )?;
     let closed_focus = cap("focus_log")?;
     if closed_seg > 0 {
@@ -268,15 +270,10 @@ pub fn pause_for_idle(conn: &Connection, idle_secs: i64) -> Result<bool> {
             params![now()],
         )?;
     }
-    // Record the away span itself, starting at the moment input actually stopped
-    // (now - idle_secs), so "time away from the machine" shows up as its own
-    // bucket instead of vanishing between the capped segments.
-    let away_start: String = conn.query_row(
-        "SELECT datetime('now', ?1)",
-        params![cutoff],
-        |r| r.get(0),
-    )?;
-    open_away(conn, &away_start, "idle")?;
+    // Record the away span itself, starting at the moment presence ended, so
+    // "time away from the machine" shows up as its own bucket instead of
+    // vanishing between the capped segments.
+    open_away(conn, away_since, "idle")?;
     Ok(closed_seg > 0 || closed_focus > 0)
 }
 
